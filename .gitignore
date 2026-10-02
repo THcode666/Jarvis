@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.pyc
+
+# 运行时数据（个人数据，勿上传）
+data/
+
+# 打包产物
+dist/
+build/
+*.spec
+
+# 开发自测截图
+assets/shots/

@@ -1,0 +1,2 @@
+PySide6>=6.6
+pillow>=10.0    # 仅 tools/make_icon.py 重新生成图标时需要

@@ -1,0 +1,82 @@
+# 贾维斯 Jarvis
+
+基于 **PySide6 (Qt6)** 的 Windows 单机工作助手：任务管理、备忘录、疑难问题追踪、SOP 知识库四大模块 + 跨模块全局搜索 + 一键备份，深色科幻风界面。PyInstaller 打包为免安装单文件 exe，**完全离线运行，数据 100% 本地保存**。
+
+| 缓急 · 任务清单 | 存知 · SOP知识库 |
+| --- | --- |
+| ![任务清单](docs/screenshots/tasks.png) | ![SOP知识库](docs/screenshots/sop.png) |
+| **全局搜索（模糊 + 关联）** | **帮记 · 备忘录** |
+| ![搜索](docs/screenshots/search.png) | ![备忘录](docs/screenshots/memo.png) |
+| **解惑 · 疑难问题** | **编辑对话框** |
+| ![问题](docs/screenshots/questions.png) | ![任务对话框](docs/screenshots/dialog_task.png) |
+
+## 功能特性
+
+- **缓急（任务清单）**：事情描述 / 难点 / 开始时间 / Due Day / 优先级（高·中·低·弱）；按优先级或 Due Day 排序；逾期任务红色"⚠已逾期"提醒；完成后自动归档到"已完成事项"页签，支持一键还原回清单。
+- **帮记（备忘录）**：随手记录需要记住的内容与时间，卡片式展示，按时间倒序。
+- **解惑（疑难问题）**：记录工作中不明白的问题，可先存问题、之后再补充解决方案；已解决的绿色标记、未解决的灰色"待解决"。
+- **存知（SOP 知识库）**：标题 + 正文 + 附件。图片内嵌预览（点击看大图）；**.pptx 自动用标准库抽取每页文字**，无需安装 Office 即可预览和被搜索；也可调用系统默认程序打开原文件。左侧标题列表支持快速筛选。
+- **全局搜索**：跨四大模块、覆盖所有字段（任务描述/难点、备忘内容、问题/方案、SOP 标题/正文/PPT 文字/附件名）。支持模糊匹配、空格分隔多关键词（跨字段关联命中也计入），整句命中与标题命中加权排序，命中词黄色高亮，点击结果卡片直接跳转到对应条目。
+- **一键备份**：导出 = 全部数据 + 附件打包成单个 zip；导入 = 从备份恢复（覆盖前二次确认）。换电脑迁移只需一个文件。
+- **便携化数据**：数据保存在 exe 旁边的 `data\` 文件夹（JSON + 附件），目录不可写时自动回退 `%APPDATA%`，状态栏实时显示实际位置。
+
+## 快速开始
+
+**直接使用（推荐）**：从 [Releases](../../releases) 下载 `贾维斯Jarvis.exe`，双击运行。无需安装 Python 和任何依赖，不联网。
+
+**从源码运行**（Python 3.10+）：
+
+```bash
+pip install -r requirements.txt
+python main.py
+```
+
+**运行自测**（25 项：数据层 CRUD / 状态流转 / 搜索 / 导入导出往返 / pptx 解析 / GUI 构建与截图）：
+
+```bash
+python selftest.py            # 界面截图输出到 assets/shots/
+```
+
+**打包 exe**：
+
+```bash
+build.bat                     # 或 python -m PyInstaller --onefile --windowed --icon assets/jarvis.ico --add-data "assets;assets" main.py
+```
+
+## 架构
+
+界面 / 数据 / 搜索彻底分离，每加一个功能模块只需要"一个模块文件 + 注册表里一行"：
+
+```
+main.py                 入口（python main.py 运行；--selftest 自测）
+app/
+  common.py             通用工具：路径定位（exe 便携目录/APPDATA 回退）、时间、ID
+  theme.py              深色科幻主题 QSS（配色常量集中于此）
+  icons.py              程序内图标：QPainter 现场绘制，零图片依赖
+  data_store.py         数据层：四大集合 CRUD、原子写盘、附件管理、zip 导入导出
+  search.py             搜索引擎：模糊 + 跨字段关联打分，与模块零耦合
+  dialogs.py            各模块新增/编辑对话框
+  main_window.py        主窗口：侧边导航 + 顶部全局搜索 + NAV 模块注册表
+  modules/
+    tasks.py            缓急：任务表格（排序/逾期标记/归档还原）
+    card_base.py        卡片式模块基类（帮记/解惑共用）
+    memos.py            帮记
+    questions.py        解惑
+    sop.py              存知：列表+详情分栏、图片缩略图、pptx 文字抽取
+    search_page.py      全局搜索结果页（分组/高亮/跳转）
+tools/make_icon.py      重新生成应用图标（依赖 Pillow）
+```
+
+**数据结构**：单一 JSON（`data/jarvis_data.json`）保存四大集合，附件实体文件存 `data/attachments/`；写入采用临时文件 + `os.replace` 原子替换，避免意外断电损坏数据。
+
+**新增一个模块只要三步**：在 `app/modules/` 写一个模块类（提供 `refresh()` / `search_records()` / `locate()`）→ 在 `main_window.py` 的 `NAV` 列表加一行 → 完成（搜索、状态栏计数自动接入）。删减模块反过来做即可。
+
+## 设计取舍
+
+- **不联网、无外部服务**：搜索用自研的轻量打分引擎而非全文检索库，pptx 解析用标准库 zipfile+xml 而非 python-pptx，把依赖压缩到只有 PySide6 一个硬依赖，弱配老电脑也能秒开。
+- **JSON 而非 SQLite**：个人单机数据量下，JSON 可读、可 diff、备份即拷贝，出问题肉眼可查；导入/导出直接是"一个 zip"。
+- **QPainter 图标**：应用图标与导航图标全部程序绘制，仓库里没有二进制图片负担，改配色一处生效。
+
+## License
+
+[MIT](LICENSE)
