@@ -5,7 +5,7 @@
 - 按 优先级 或 Due Day 排序
 - 状态：未完成 / 已完成；已完成的进入"已完成事项"页签，可一键还原回清单
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -19,6 +19,26 @@ from ..dialogs import TaskDialog
 from ..search import SearchRecord
 
 _PRIORITY_COLOR = {"高": "#ff6b6b", "中": "#ffb64d", "低": "#29c6ff", "弱": "#7d92ad"}
+
+
+def collect_due(tasks, today=None):
+    """把未完成任务按 逾期 / 今日 / 三日内 分组（托盘提醒与角标共用）。"""
+    today = today or datetime.today().date()
+    groups = {"逾期": [], "今日": [], "三日": []}
+    for t in tasks:
+        if t.get("status") == STATUS_DONE or not t.get("due_day"):
+            continue
+        try:
+            d = datetime.strptime(t["due_day"][:10], "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if d < today:
+            groups["逾期"].append(t)
+        elif d == today:
+            groups["今日"].append(t)
+        elif d <= today + timedelta(days=3):
+            groups["三日"].append(t)
+    return groups
 
 
 class TaskModule(QWidget):
@@ -95,9 +115,10 @@ class TaskModule(QWidget):
         done.sort(key=key)
         self._fill(self.tableTodo, todo, done_tab=False)
         self._fill(self.tableDone, done, done_tab=True)
-        overdue = sum(1 for t in todo if self._is_overdue(t))
+        g = collect_due(todo)
         self.lblCount.setText(
-            f"进行中 {len(todo)} 项（超期 {overdue}）· 已完成 {len(done)} 项")
+            f"进行中 {len(todo)} 项（逾期 {len(g['逾期'])} · 今日到期 {len(g['今日'])}）"
+            f"· 已完成 {len(done)} 项")
 
     def _sort_key(self, t):
         if self.cbSort.currentIndex() == 0:  # 优先级：高中低弱，再按due day

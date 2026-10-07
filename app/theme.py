@@ -133,6 +133,11 @@ QScrollBar::handle:horizontal {{ background: #24405f; border-radius: 5px; min-wi
 /* ---- 其他 ---- */
 QSplitter::handle {{ background: {BORDER}; width: 2px; }}
 QStatusBar {{ background: {BG_PANEL}; border-top: 1px solid {BORDER}; color: {TEXT_DIM}; }}
+QPushButton#dueBadge {{
+    border: none; background: transparent; color: {DANGER};
+    font-weight: bold; padding: 0 8px;
+}}
+QPushButton#dueBadge:hover {{ color: #ff9191; }}
 QToolTip {{
     background: {BG_PANEL}; color: {TEXT}; border: 1px solid {ACCENT}; padding: 4px;
 }}

@@ -165,6 +165,12 @@ def test_search(store):
     r7 = search(recs, "RECIPE")  # 大小写
     check("忽略大小写", len(r7) == 1)
 
+    r8 = search(recs, "hzk")  # 换针卡 → huan zhen ka
+    check("拼音首字母命中", bool(r8) and r8[0].record.item_id == "1")
+    r9 = search(recs, "zhenka")  # 全拼
+    check("拼音全拼命中", any(x.record.item_id == "1" for x in r9))
+    check("拼音匹配结果有标记", bool(r8) and r8[0].via_pinyin)
+
     check("高亮标签存在", "<font" in search(recs, "针卡")[0].snippet_html)
 
 
@@ -331,6 +337,19 @@ def test_gui(store, tmp, shots_dir):
     mm.refresh()
     check("空状态提示可重复显示", mm.emptyLabel is not None)
 
+    # ---- 托盘与到期提醒 ----
+    check("托盘图标就绪", win.tray is not None)
+    win._check_reminders()
+    check("提醒摘要生成", "逾期" in win._last_digest)  # 样例里有逾期任务
+    d1 = win._last_digest
+    win._check_reminders()
+    check("提醒不重复弹", win._last_digest == d1)
+
+    win.actTrayClose.setChecked(False)
+    with open(os.path.join(store.data_dir, "settings.json"), encoding="utf-8") as f:
+        _st = __import__("json").load(f)
+    check("托盘开关已保存", _st.get("close_to_tray") is False)
+
     # 搜索跳转逻辑
     win.open_search_result("sops", sop["id"], False)
     check("搜索跳转到存知", win.stack.currentIndex() == 3)
@@ -362,6 +381,7 @@ def main():
 
     # QPixmap 等绘图类需要先有 QGuiApplication（离屏即可）
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    os.environ.setdefault("JARVIS_SILENT", "1")  # 自测期间不弹系统托盘通知
     from PySide6.QtWidgets import QApplication
     app = QApplication.instance() or QApplication([])
 

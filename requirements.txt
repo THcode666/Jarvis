@@ -1,2 +1,3 @@
 PySide6>=6.6
-pillow>=10.0    # 仅 tools/make_icon.py 重新生成图标时需要
+pypinyin>=0.50   # 拼音首字母/全拼搜索；缺失时该功能自动关闭，其余不受影响
+pillow>=10.0     # 仅 tools/make_icon.py 重新生成图标时需要

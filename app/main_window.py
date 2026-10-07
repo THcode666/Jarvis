@@ -9,14 +9,15 @@ import os
 from PySide6.QtCore import QTimer, Qt, QSize, QByteArray, QEvent
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
-    QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
-    QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget, QStatusBar,
+    QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMenu,
+    QMessageBox, QPushButton, QSizePolicy, QStackedWidget, QStatusBar,
+    QSystemTrayIcon, QVBoxLayout, QWidget,
 )
 
 from . import common, icons, theme
 from .data_store import DataStore
 from .search import search as run_search
-from .modules.tasks import TaskModule
+from .modules.tasks import TaskModule, collect_due
 from .modules.memos import MemoModule
 from .modules.questions import QuestionModule
 from .modules.sop import SopModule
@@ -97,7 +98,7 @@ class MainWindow(QMainWindow):
         self.edSearch = QLineEdit()
         self.edSearch.setObjectName("globalSearch")
         self.edSearch.setPlaceholderText(
-            "🔍  全局搜索：任务 / 备忘 / 问题 / SOP（支持空格分隔多个关键词、模糊匹配）")
+            "🔍  全局搜索：任务 / 备忘 / 问题 / SOP（多关键词、模糊、拼音首字母如 hzk）")
         self.edSearch.addAction(icons.search_icon(), QLineEdit.LeadingPosition)
         self.edSearch.setClearButtonEnabled(True)
         self.edSearch.returnPressed.connect(self._search_now)
@@ -134,6 +135,13 @@ class MainWindow(QMainWindow):
         self.setStatusBar(sb)
         self.lblDataPath = QLabel("")
         sb.addWidget(self.lblDataPath)
+        self.lblDue = QPushButton("")
+        self.lblDue.setObjectName("dueBadge")
+        self.lblDue.setCursor(Qt.PointingHandCursor)
+        self.lblDue.setToolTip("点击打开任务清单")
+        self.lblDue.clicked.connect(lambda: self.switch_page(0))
+        self.lblDue.hide()
+        sb.addPermanentWidget(self.lblDue)
         self.lblCounts = QLabel("")
         sb.addPermanentWidget(self.lblCounts)
 
@@ -150,6 +158,18 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
+        # ---- 托盘常驻 + 到期提醒 ----
+        self._really_quit = False
+        self._tray_tipped = False
+        self._last_digest = ""
+        self.close_to_tray = bool(state.get("close_to_tray", True))
+        self._make_tray()
+        self._remind_timer = QTimer(self)
+        self._remind_timer.setInterval(30 * 60 * 1000)  # 每半小时巡检一次
+        self._remind_timer.timeout.connect(self._check_reminders)
+        self._remind_timer.start()
+        QTimer.singleShot(2500, self._check_reminders)  # 启动后稍等即查一次
+
         # 快捷键：Ctrl+F 搜索 / Ctrl+N 新增 / F5 刷新
         for keys, slot in (("Ctrl+F", self._focus_search),
                            ("Ctrl+N", self._new_current),
@@ -162,6 +182,95 @@ class MainWindow(QMainWindow):
         self.switch_page(pi if isinstance(pi, int) and 0 <= pi < len(self.pages) else 0)
         self.store.changed.connect(self._on_data_changed)
         self._update_status()
+
+    # ---- 托盘与到期提醒 ----
+
+    def _make_tray(self):
+        self.tray = QSystemTrayIcon(icons.app_icon(), self)
+        self.tray.setToolTip(common.APP_NAME)
+        menu = QMenu()
+        act_show = menu.addAction("显示主界面")
+        act_show.triggered.connect(self._show_from_tray)
+        act_check = menu.addAction("检查任务提醒")
+        act_check.triggered.connect(lambda: self._check_reminders(force=True))
+        menu.addSeparator()
+        self.actTrayClose = menu.addAction("关闭时最小化到托盘")
+        self.actTrayClose.setCheckable(True)
+        self.actTrayClose.blockSignals(True)
+        self.actTrayClose.setChecked(self.close_to_tray)
+        self.actTrayClose.blockSignals(False)
+        self.actTrayClose.toggled.connect(self._toggle_close_to_tray)
+        menu.addSeparator()
+        act_quit = menu.addAction("退出")
+        act_quit.triggered.connect(self._quit_app)
+        self.tray.setContextMenu(menu)
+        self.tray.activated.connect(
+            lambda reason: self._show_from_tray()
+            if reason == QSystemTrayIcon.DoubleClick else None)
+        self.tray.messageClicked.connect(self._goto_tasks)
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.tray.show()
+
+    def _show_from_tray(self):
+        self.show()
+        self.setWindowState(self.windowState() & ~Qt.WindowMinimized)
+        self.raise_()
+        self.activateWindow()
+
+    def _goto_tasks(self):
+        self._show_from_tray()
+        self.switch_page(0)
+
+    def _toggle_close_to_tray(self, checked):
+        self.close_to_tray = checked
+        self._save_state()
+
+    def _quit_app(self):
+        self._really_quit = True
+        self.tray.hide()
+        self.close()
+
+    def _check_reminders(self, force=False):
+        """巡检到期任务：刷新角标；内容有变化且托盘可用时弹一次通知。"""
+        g = collect_due(self.store.data["tasks"])
+        n, m = len(g["逾期"]), len(g["今日"])
+        if n or m:
+            parts = []
+            if n:
+                parts.append(f"逾期 {n}")
+            if m:
+                parts.append(f"今日到期 {m}")
+            self.lblDue.setText("⚠ " + " · ".join(parts))
+            self.lblDue.show()
+        else:
+            self.lblDue.hide()
+
+        digest = self._digest_text(g)
+        if not digest:
+            self._last_digest = ""
+            return
+        if digest == self._last_digest and not force:
+            return
+        self._last_digest = digest
+        if os.environ.get("JARVIS_SILENT"):
+            return  # 自测等场景不弹系统通知
+        if self.tray.isVisible():
+            self.tray.showMessage("贾维斯任务提醒", digest,
+                                  QSystemTrayIcon.Information, 10000)
+
+    @staticmethod
+    def _digest_text(g):
+        def brief(items):
+            s = "、".join(t.get("desc", "")[:14] for t in items[:4])
+            return s + " 等" if len(items) > 4 else s
+        parts = []
+        if g["逾期"]:
+            parts.append(f"逾期 {len(g['逾期'])} 项：{brief(g['逾期'])}")
+        if g["今日"]:
+            parts.append(f"今日到期 {len(g['今日'])} 项：{brief(g['今日'])}")
+        if g["三日"]:
+            parts.append(f"3日内到期 {len(g['三日'])} 项：{brief(g['三日'])}")
+        return "\n".join(parts)
 
     # ---- 快捷键与窗口状态 ----
 
@@ -199,18 +308,33 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError):
             return {}
 
-    def closeEvent(self, event):
+    def _save_state(self):
         try:
             state = {
                 "geometry": bytes(self.saveGeometry().toBase64()).decode("ascii"),
                 "page": self.last_page_idx,
                 "task_sort": self.pages[0].cbSort.currentIndex(),
+                "close_to_tray": self.close_to_tray,
             }
             with open(self._settings_path, "w", encoding="utf-8") as f:
                 json.dump(state, f)
         except OSError:
             pass
-        super().closeEvent(event)
+
+    def closeEvent(self, event):
+        self._save_state()
+        if self.close_to_tray and not self._really_quit \
+                and QSystemTrayIcon.isSystemTrayAvailable():
+            event.ignore()
+            self.hide()
+            if not self._tray_tipped:
+                self._tray_tipped = True
+                if self.tray.isVisible():
+                    self.tray.showMessage(
+                        "贾维斯", "已最小化到托盘：双击托盘图标恢复，右键菜单可退出。",
+                        QSystemTrayIcon.Information, 5000)
+        else:
+            event.accept()
 
     # ---- 导航 ----
 
@@ -313,3 +437,4 @@ class MainWindow(QMainWindow):
         self.lblCounts.setText(
             f"任务 {len(d['tasks'])} · 备忘 {len(d['memos'])} · 问题 {len(d['questions'])} · SOP {len(d['sops'])}")
         self.lblDataPath.setText(f"数据目录：{self.store.data_dir}")
+        self._check_reminders()

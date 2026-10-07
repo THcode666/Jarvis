@@ -1,15 +1,18 @@
 # -*- coding: utf-8 -*-
-"""全局搜索引擎：模糊搜索 + 关联搜索。
+"""全局搜索引擎：模糊搜索 + 关联搜索 + 拼音搜索。
 
 - 模糊搜索：忽略大小写/首尾空格；支持空格分隔多关键词（全部命中排名更靠前）。
 - 关联搜索：跨四个模块、跨所有字段（描述/难点/内容/解决方案/SOP正文/附件名/PPT文字）；
   只要命中任一关键词即返回，按命中率打分排序；整句命中得分最高。
+- 拼音搜索：纯字母关键词可命中中文的拼音首字母（hzk → 换针卡）或全拼（zhenka），
+  得分低于直接命中；未安装 pypinyin 时该能力自动关闭，不影响其他搜索。
 - 标题类字段命中额外加权，让"看起来最相关"的结果排在最前。
 
 各模块只需提供 search_records()，返回统一结构，新增模块无需改动本文件。
 """
 import re
 from dataclasses import dataclass, field
+from functools import lru_cache
 
 
 @dataclass
@@ -27,10 +30,43 @@ class SearchResult:
     record: SearchRecord
     score: float
     snippet_html: str    # 带高亮的摘要（rich text，可直接显示）
+    via_pinyin: bool = False   # 是否有关键词是靠拼音命中的
 
 
 def _norm(s: str) -> str:
     return (s or "").lower().strip()
+
+
+# ---- 拼音形式（首字母串 / 全拼串），按文本缓存 ----
+
+_lazy_pinyin = None
+
+
+def _pinyin_fn():
+    global _lazy_pinyin
+    if _lazy_pinyin is None:
+        try:
+            from pypinyin import lazy_pinyin
+            _lazy_pinyin = lazy_pinyin
+        except ImportError:
+            _lazy_pinyin = False
+    return _lazy_pinyin or None
+
+
+@lru_cache(maxsize=8192)
+def pinyin_forms(text: str) -> tuple:
+    """返回 (首字母串, 全拼串)，小写；无拼音库或无汉字时返回 ("", "")。"""
+    fn = _pinyin_fn()
+    if not fn or not text:
+        return "", ""
+    try:
+        segs = [s for s in fn(text) if s]
+        init = "".join(s[0] for s in segs if s[0].isascii() and s[0].isalpha()).lower()
+        full = "".join(ch for ch in "".join(segs).lower()
+                       if ch.isascii() and ch.isalpha())
+        return init, full
+    except Exception:
+        return "", ""
 
 
 def _escape(s: str) -> str:
@@ -93,26 +129,52 @@ def search(records: list, query: str) -> list:
         combined = " ".join(texts.values())
         title_l = _norm(rec.title)
 
+        # 该记录所有字段的拼音形式（缓存后开销很小）
+        inits, fulls = [], []
+        for text in rec.fields.values():
+            if text:
+                i, f = pinyin_forms(text)
+                if i:
+                    inits.append(i)
+                if f:
+                    fulls.append(f)
+        all_init = " ".join(inits)
+        all_full = " ".join(fulls)
+
+        def direct(t):
+            return t in combined
+
+        def by_pinyin(t):
+            # 纯字母、至少2位才参与拼音匹配，避免单字母噪声
+            return len(t) >= 2 and t.isascii() and (t in all_init or t in all_full)
+
         score = 0.0
-        # 1) 整句命中（模糊搜索核心）
+        via_py = False
         if phrase in combined:
             score = 100.0
             if phrase in title_l:
                 score += 60.0
-        # 2) 全部关键词命中（可分散在不同字段——跨字段"关联"）
-        elif all(t in combined for t in tokens):
+        elif all(direct(t) for t in tokens):
             score = 70.0
             if all(t in title_l for t in tokens):
                 score += 30.0
-        # 3) 部分关键词命中（宽松关联，保证"搜得到"）
+        elif all(direct(t) or by_pinyin(t) for t in tokens):
+            score = 55.0
+            via_py = any(not direct(t) for t in tokens)
         else:
-            hit = sum(1 for t in tokens if t in combined)
-            if hit:
-                score = 40.0 * hit / len(tokens)
+            d_hit = sum(1 for t in tokens if direct(t))
+            p_hit = sum(1 for t in tokens if not direct(t) and by_pinyin(t))
+            if d_hit:
+                score = 40.0 * (d_hit + p_hit) / len(tokens)
+                via_py = p_hit > 0
+            elif p_hit:
+                score = 22.0 * p_hit / len(tokens)
+                via_py = True
 
         if score <= 0:
             continue
-        results.append(SearchResult(rec, score, _snippet_html(rec.fields, tokens, phrase)))
+        results.append(SearchResult(
+            rec, score, _snippet_html(rec.fields, tokens, phrase), via_py))
 
     results.sort(key=lambda r: (-r.score, r.record.module_key, r.record.title))
     return results

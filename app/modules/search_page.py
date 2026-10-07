@@ -50,7 +50,7 @@ class SearchPage(QWidget):
                 w.deleteLater()
 
         if not results:
-            empty = QLabel("换个关键词试试，或减少关键词个数。\n搜索范围：任务描述/难点、备忘内容、问题/解决方案、SOP标题/正文/PPT文字/附件名。")
+            empty = QLabel("换个关键词试试，或减少关键词个数。\n搜索范围：任务描述/难点、备忘内容、问题/解决方案、SOP标题/正文/PPT文字/附件名。\n输入拼音首字母也能命中（如 hzk → 换针卡）。")
             empty.setObjectName("muted")
             empty.setAlignment(Qt.AlignCenter)
             empty.setContentsMargins(0, 60, 0, 0)
@@ -102,6 +102,10 @@ class SearchPage(QWidget):
             snip.setWordWrap(True)
             snip.setStyleSheet("color:#a9bdd6;")
             v.addWidget(snip)
+            if r.via_pinyin and "<font" not in r.snippet_html:
+                tag_py = QLabel("拼音匹配")
+                tag_py.setStyleSheet("color:#7d92ad;font-size:11px;")
+                v.addWidget(tag_py)
 
         bottom = QHBoxLayout()
         hint = QLabel("点击卡片跳转到该条内容")

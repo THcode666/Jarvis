@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 
 APP_NAME = "贾维斯 Jarvis"
-APP_VERSION = "v1.1.0"
+APP_VERSION = "v1.2.0"
 
 DT_FORMAT = "%Y-%m-%d %H:%M"
 D_FORMAT = "%Y-%m-%d"
