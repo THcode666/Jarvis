@@ -19,6 +19,8 @@ class CardListModule(QWidget):
     def __init__(self, store):
         super().__init__()
         self.store = store
+        # 数据任何变化立即重建卡片列表（自动刷新的核心）
+        store.changed.connect(self.refresh)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 12, 16, 12)
@@ -72,6 +74,7 @@ class CardListModule(QWidget):
             if w:
                 w.setParent(None)  # 立即从布局移除，不等事件循环
                 w.deleteLater()
+        self.emptyLabel = None  # 上轮的空状态提示已随循环移除，避免悬空引用
         data = self.items()
         for item in data:
             self.cardsLay.insertWidget(self.cardsLay.count() - 1, self.make_card(item))

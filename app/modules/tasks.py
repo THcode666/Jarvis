@@ -28,6 +28,7 @@ class TaskModule(QWidget):
     def __init__(self, store, jump_signal=None):
         super().__init__()
         self.store = store
+        store.changed.connect(self.refresh)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 12, 16, 12)
@@ -140,6 +141,7 @@ class TaskModule(QWidget):
             for col, item in enumerate((pri, desc, diff, start, due)):
                 table.setItem(row, col, item)
             table.item(row, 1).setToolTip(t.get("desc", ""))
+            table.item(row, 1).setData(Qt.UserRole, t["id"])  # 定位按ID，不受同名影响
             table.setRowHeight(row, 44)
         self._fill_actions(table, tasks, done_tab)
 
@@ -251,6 +253,7 @@ class TaskModule(QWidget):
         self.tabs.setCurrentIndex(1 if is_done else 0)
         table = self.tableDone if is_done else self.tableTodo
         for row in range(table.rowCount()):
-            if table.item(row, 1) and table.item(row, 1).toolTip() == task.get("desc", ""):
+            it = table.item(row, 1)
+            if it and it.data(Qt.UserRole) == item_id:
                 table.selectRow(row)
                 break

@@ -49,6 +49,7 @@ class DataStore(QObject):
         os.makedirs(self.attach_dir, exist_ok=True)
         self.data = {k: [] for k in _DATA_KEYS}
         self.load()
+        self.backup_json()
 
     # ---------- 持久化 ----------
 
@@ -75,6 +76,28 @@ class DataStore(QObject):
     def _emit(self):
         self.save()
         self.changed.emit()
+
+    def backup_json(self, keep: int = 5):
+        """把当前数据文件快照到 data/backups/，滚动保留最近 keep 份。
+
+        启动时和导入覆盖前各做一次，误删/误导入后可以从这里捞回数据。
+        """
+        if not os.path.exists(self.json_path):
+            return
+        bdir = os.path.join(self.data_dir, "backups")
+        try:
+            os.makedirs(bdir, exist_ok=True)
+            name = f"jarvis_data_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+            shutil.copy2(self.json_path, os.path.join(bdir, name))
+            olds = sorted(f for f in os.listdir(bdir)
+                          if f.startswith("jarvis_data_") and f.endswith(".json"))
+            for f in olds[:-keep]:
+                try:
+                    os.remove(os.path.join(bdir, f))
+                except OSError:
+                    pass
+        except OSError:
+            pass
 
     # ---------- 缓急：任务 ----------
 
@@ -254,6 +277,9 @@ class DataStore(QObject):
             for k in _DATA_KEYS:
                 if k not in loaded:
                     raise ValueError("备份文件数据不完整")
+
+            # 覆盖前先快照当前数据，误导入可回退
+            self.backup_json()
 
             # 清空当前附件
             for name in os.listdir(self.attach_dir):

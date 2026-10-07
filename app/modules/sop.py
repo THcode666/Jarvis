@@ -29,6 +29,7 @@ class SopModule(QWidget):
         super().__init__()
         self.store = store
         self.current_id = None
+        store.changed.connect(self.refresh)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 12, 16, 12)
@@ -113,10 +114,17 @@ class SopModule(QWidget):
     # ---------- 刷新与选择 ----------
 
     def refresh(self):
+        """重建列表并重渲染详情。
+
+        详情必须在这里显式渲染：列表重建期间信号被屏蔽，靠
+        currentRowChanged 触发会漏掉"选中的还是同一条"的情况，
+        导致编辑后详情面板停留在旧内容。
+        """
         selected = self.current_id
+        sops = sorted(self.store.data["sops"], key=lambda s: s.get("created_at", ""))
         self.list.blockSignals(True)
         self.list.clear()
-        sops = sorted(self.store.data["sops"], key=lambda s: s.get("created_at", ""))
+        target_row = -1
         for i, sop in enumerate(sops):
             title = sop.get("title") or "（无标题）"
             n_att = len(sop.get("attachments", []))
@@ -126,14 +134,19 @@ class SopModule(QWidget):
             item.setData(Qt.UserRole, sop["id"])
             self.list.addItem(item)
             if sop["id"] == selected:
-                self.list.setCurrentRow(i)
+                target_row = i
+        if sops:
+            row = target_row if target_row >= 0 else 0
+            self.list.setCurrentRow(row)
+            self.current_id = self.list.item(row).data(Qt.UserRole)
+        else:
+            self.current_id = None
         self.list.blockSignals(False)
         self.lblCount.setText(f"共 {len(sops)} 篇")
         self._apply_filter(self.edFilter.text())
-        if self.list.currentRow() < 0 and self.list.count() > 0:
-            self.list.setCurrentRow(0)
-        elif self.list.count() == 0:
-            self.current_id = None
+        if sops:
+            self._render_detail()
+        else:
             self._show_empty_detail()
 
     def _apply_filter(self, text):
@@ -246,7 +259,9 @@ class SopModule(QWidget):
                 QMessageBox.warning(self, "提示", "标题不能为空")
                 return
             sop = self.store.add_sop(f["title"], f["content"], f["attachments"])
+            # add_sop 触发的刷新还停在旧选中项，这里选中新条目并重渲染
             self.current_id = sop["id"]
+            self.refresh()
 
     def edit_current(self):
         sop = self._current_sop()
@@ -272,7 +287,7 @@ class SopModule(QWidget):
                                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ret == QMessageBox.Yes:
             self.store.delete("sops", sop["id"])
-            self.current_id = None
+            # changed 信号触发的 refresh 会自动选中第一条并渲染详情
 
     # ---------- 搜索接入 ----------
 

@@ -3,9 +3,11 @@
 
 新增/删减模块只需改 NAV 列表（一行一个模块），其余自动生效。
 """
+import json
 import os
 
-from PySide6.QtCore import QTimer, Qt, QSize
+from PySide6.QtCore import QTimer, Qt, QSize, QByteArray, QEvent
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QFileDialog, QHBoxLayout, QLabel, QLineEdit, QMainWindow, QMessageBox,
     QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget, QStatusBar,
@@ -135,9 +137,80 @@ class MainWindow(QMainWindow):
         self.lblCounts = QLabel("")
         sb.addPermanentWidget(self.lblCounts)
 
-        self.switch_page(0)
+        # ---- 恢复记住的界面状态（窗口大小/位置、上次页面、任务排序）----
+        self._settings_path = os.path.join(store.data_dir, "settings.json")
+        state = self._load_state()
+        si = state.get("task_sort", 0)
+        if isinstance(si, int) and 0 <= si < self.pages[0].cbSort.count():
+            self.pages[0].cbSort.setCurrentIndex(si)
+        geo = state.get("geometry")
+        if isinstance(geo, str) and geo:
+            try:
+                self.restoreGeometry(QByteArray.fromBase64(geo.encode("ascii")))
+            except Exception:
+                pass
+
+        # 快捷键：Ctrl+F 搜索 / Ctrl+N 新增 / F5 刷新
+        for keys, slot in (("Ctrl+F", self._focus_search),
+                           ("Ctrl+N", self._new_current),
+                           ("F5", self._refresh_current)):
+            sc = QShortcut(QKeySequence(keys), self)
+            sc.activated.connect(slot)
+        self.edSearch.installEventFilter(self)  # Esc 退出搜索
+
+        pi = state.get("page", 0)
+        self.switch_page(pi if isinstance(pi, int) and 0 <= pi < len(self.pages) else 0)
         self.store.changed.connect(self._on_data_changed)
         self._update_status()
+
+    # ---- 快捷键与窗口状态 ----
+
+    def _focus_search(self):
+        self.edSearch.setFocus()
+        self.edSearch.selectAll()
+
+    def _new_current(self):
+        if self.search_mode:
+            self.switch_page(self.last_page_idx)
+        page = self.pages[self.stack.currentIndex()]
+        if hasattr(page, "add_item"):
+            page.add_item()
+
+    def _refresh_current(self):
+        if self.search_mode:
+            self._search_now()
+        else:
+            self.pages[self.stack.currentIndex()].refresh()
+
+    def eventFilter(self, obj, event):
+        """搜索框内按 Esc 清空并退出搜索结果页。"""
+        if obj is self.edSearch and event.type() == QEvent.KeyPress \
+                and event.key() == Qt.Key_Escape:
+            self.edSearch.clear()   # 触发 textChanged → _exit_search
+            self.edSearch.clearFocus()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _load_state(self):
+        try:
+            with open(self._settings_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def closeEvent(self, event):
+        try:
+            state = {
+                "geometry": bytes(self.saveGeometry().toBase64()).decode("ascii"),
+                "page": self.last_page_idx,
+                "task_sort": self.pages[0].cbSort.currentIndex(),
+            }
+            with open(self._settings_path, "w", encoding="utf-8") as f:
+                json.dump(state, f)
+        except OSError:
+            pass
+        super().closeEvent(event)
 
     # ---- 导航 ----
 
@@ -231,6 +304,9 @@ class MainWindow(QMainWindow):
 
     def _on_data_changed(self):
         self._update_status()
+        # 搜索结果页正打开时数据变了要即时重查，避免展示过期结果
+        if self.search_mode and self.edSearch.text().strip():
+            self._search_now()
 
     def _update_status(self):
         d = self.store.data

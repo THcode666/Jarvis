@@ -13,6 +13,7 @@
  5) GUI：离屏构建主窗口，遍历四个页面+搜索页+对话框，刷新并截图（人工检查用）
 """
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -97,6 +98,10 @@ def test_data_layer(tmp):
           len(store2.data["tasks"]) == 3 and len(store2.data["sops"]) == 1
           and store2.find("sops", sop1["id"]) is not None)
 
+    bdir = os.path.join(tmp, "data", "backups")
+    check("启动自动备份JSON", os.path.isdir(bdir) and any(
+        f.startswith("jarvis_data_") and f.endswith(".json") for f in os.listdir(bdir)))
+
     # 删除（SOP附件随之删除）
     did = sop1["id"]
     stored_name = att_ppt["stored"]
@@ -176,12 +181,16 @@ def test_export_import(store, tmp):
     target_dir = os.path.join(tmp, "restored")
     store_b = DataStore(target_dir)
     store_b.add_task("旧数据会被覆盖", "", "2026-01-01 00:00", "2026-01-02", "低")
+    bdir_b = os.path.join(target_dir, "backups")
+    n_snap0 = len(os.listdir(bdir_b)) if os.path.isdir(bdir_b) else 0
     store_b.import_zip(zip_path)
+    n_snap1 = len(os.listdir(bdir_b)) if os.path.isdir(bdir_b) else 0
     same = (len(store_b.data["tasks"]) == 3
             and len(store_b.data["memos"]) == 1
             and len(store_b.data["questions"]) == 1
             and len(store_b.data["sops"]) == 1)
     check("导入后与导出前一致", same)
+    check("导入前自动快照", n_snap1 == n_snap0 + 1)
 
     # 坏文件拒绝
     bad = os.path.join(tmp, "bad.zip")
@@ -283,6 +292,45 @@ def test_gui(store, tmp, shots_dir):
     dlg2.grab().save(os.path.join(shots_dir, "07_SOP编辑对话框.png"))
     dlg2.close()
 
+    # ---- 自动刷新：不切页面、不手动刷新，写入数据后当前页立即更新 ----
+    from PySide6.QtCore import Qt as _Qt
+    task_page = win.pages[0]
+    n0 = task_page.tableTodo.rowCount()
+    new_task = store.add_task("自动刷新验证任务", "", "2026-10-03 08:00", "2026-10-20", "高")
+    check("任务自动刷新", task_page.tableTodo.rowCount() == n0 + 1)
+
+    task_page.locate(new_task["id"])
+    cur_item = task_page.tableTodo.item(task_page.tableTodo.currentRow(), 1)
+    check("定位到指定任务",
+          cur_item is not None and cur_item.data(_Qt.UserRole) == new_task["id"])
+
+    sop_page = win.pages[3]
+    sop_page.locate(sop["id"])
+    orig_title = sop["title"]
+    store.update_sop(sop["id"], title=orig_title + "（已更新）")
+    title_widget = sop_page.detailLay.itemAt(0).widget()
+    check("SOP详情自动刷新",
+          title_widget is not None and "已更新" in title_widget.text())
+    store.update_sop(sop["id"], title=orig_title)
+
+    # 搜索结果页开着时数据变化 → 结果自动重查
+    win.edSearch.setText("自动刷新验证")
+    win._search_now()
+    m1 = re.search(r"(\d+)", win.searchPage.lblSummary.text())
+    n_res = int(m1.group(1)) if m1 else 0
+    store.add_memo("这条备忘包含 自动刷新验证 关键词", "2026-10-05 10:00")
+    m2 = re.search(r"(\d+)", win.searchPage.lblSummary.text())
+    check("搜索结果自动更新", bool(m2) and int(m2.group(1)) == n_res + 1)
+    win.edSearch.clear()
+
+    # 空状态提示在反复刷新后仍然显示（回归）
+    from app.data_store import DataStore as _DS
+    from app.modules.memos import MemoModule as _MM
+    mm = _MM(_DS(os.path.join(tmp, "empty_gui")))
+    mm.refresh()
+    mm.refresh()
+    check("空状态提示可重复显示", mm.emptyLabel is not None)
+
     # 搜索跳转逻辑
     win.open_search_result("sops", sop["id"], False)
     check("搜索跳转到存知", win.stack.currentIndex() == 3)
@@ -292,7 +340,9 @@ def test_gui(store, tmp, shots_dir):
     check("窗口图标非空", not win.windowIcon().isNull())
     check("导航图标非空", not nav_icon("tasks").isNull())
 
+    win.switch_page(2)
     win.close()
+    check("窗口状态已保存", os.path.exists(os.path.join(store.data_dir, "settings.json")))
     return 0
 
 
