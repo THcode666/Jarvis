@@ -21,15 +21,21 @@ from .modules.tasks import TaskModule, collect_due
 from .modules.memos import MemoModule
 from .modules.questions import QuestionModule
 from .modules.sop import SopModule
+from .modules.anomalies import AnomalyModule
+from .modules.weekly import WeeklyModule
+from .modules.trash_page import TrashModule
 from .modules.search_page import SearchPage
 
-# 模块注册表：新增模块 = 新建文件 + 在这里加一行
+# 模块注册表：新增模块 = 新建文件 + 在这里加一行（自动接入搜索/新增快捷键）
 NAV = [
     ("缓急", TaskModule),
     ("帮记", MemoModule),
     ("解惑", QuestionModule),
     ("存知", SopModule),
+    ("解异", AnomalyModule),
 ]
+# 附加视图（不参与搜索注册表）
+EXTRA_VIEWS = ["周报", "回收站"]
 
 
 class MainWindow(QMainWindow):
@@ -67,7 +73,8 @@ class MainWindow(QMainWindow):
         sv.addSpacing(16)
 
         self.navButtons = []
-        for i, (name, _) in enumerate(NAV):
+        all_names = [name for name, _ in NAV] + EXTRA_VIEWS
+        for i, name in enumerate(all_names):
             btn = QPushButton(f"  {name}")
             btn.setProperty("class", "nav")
             btn.setObjectName("nav")
@@ -77,6 +84,10 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(lambda _, idx=i: self.switch_page(idx))
             sv.addWidget(btn)
             self.navButtons.append(btn)
+            if name == "解异":
+                sep = QWidget()
+                sep.setFixedHeight(10)
+                sv.addWidget(sep)
         sv.addStretch(1)
 
         ver = QLabel(common.APP_VERSION)
@@ -123,6 +134,10 @@ class MainWindow(QMainWindow):
             page = cls(self.store)
             self.pages.append(page)
             self.stack.addWidget(page)
+        self.weeklyPage = WeeklyModule(self.store)
+        self.trashPage = TrashModule(self.store)
+        self.stack.addWidget(self.weeklyPage)
+        self.stack.addWidget(self.trashPage)
         self.searchPage = SearchPage(self.store)
         self.searchPage.searchRequested.connect(self.open_search_result)
         self.stack.addWidget(self.searchPage)
@@ -158,7 +173,7 @@ class MainWindow(QMainWindow):
             except Exception:
                 pass
 
-        # ---- 托盘常驻 + 到期提醒 ----
+        # ---- 托盘常驻 + 到期提醒 + 每日任务 ----
         self._really_quit = False
         self._tray_tipped = False
         self._last_digest = ""
@@ -166,9 +181,9 @@ class MainWindow(QMainWindow):
         self._make_tray()
         self._remind_timer = QTimer(self)
         self._remind_timer.setInterval(30 * 60 * 1000)  # 每半小时巡检一次
-        self._remind_timer.timeout.connect(self._check_reminders)
+        self._remind_timer.timeout.connect(self._periodic_check)
         self._remind_timer.start()
-        QTimer.singleShot(2500, self._check_reminders)  # 启动后稍等即查一次
+        QTimer.singleShot(2500, self._periodic_check)  # 启动后稍等即查一次
 
         # 快捷键：Ctrl+F 搜索 / Ctrl+N 新增 / F5 刷新
         for keys, slot in (("Ctrl+F", self._focus_search),
@@ -230,6 +245,18 @@ class MainWindow(QMainWindow):
         self.tray.hide()
         self.close()
 
+    def _periodic_check(self):
+        """半小时巡检：每日任务实例化（跨天也能触发）+ 到期提醒 + 回收站过期清理。"""
+        try:
+            self.store.ensure_daily_instances(self.pages[0].calendar)
+        except Exception:
+            pass  # 日历文件损坏等异常不阻断提醒
+        try:
+            self.store.purge_trash()
+        except Exception:
+            pass
+        self._check_reminders()
+
     def _check_reminders(self, force=False):
         """巡检到期任务：刷新角标；内容有变化且托盘可用时弹一次通知。"""
         g = collect_due(self.store.data["tasks"])
@@ -281,15 +308,17 @@ class MainWindow(QMainWindow):
     def _new_current(self):
         if self.search_mode:
             self.switch_page(self.last_page_idx)
-        page = self.pages[self.stack.currentIndex()]
-        if hasattr(page, "add_item"):
-            page.add_item()
+        idx = self.stack.currentIndex()
+        if idx < len(self.pages) and hasattr(self.pages[idx], "add_item"):
+            self.pages[idx].add_item()
 
     def _refresh_current(self):
         if self.search_mode:
             self._search_now()
-        else:
+        elif self.stack.currentIndex() < len(self.pages):
             self.pages[self.stack.currentIndex()].refresh()
+        else:
+            self.switch_page(self.stack.currentIndex())
 
     def eventFilter(self, obj, event):
         """搜索框内按 Esc 清空并退出搜索结果页。"""
@@ -340,7 +369,8 @@ class MainWindow(QMainWindow):
 
     @staticmethod
     def _icon_kind(name):
-        return {"缓急": "tasks", "帮记": "memo", "解惑": "qa", "存知": "knowledge"}.get(name, "tasks")
+        return {"缓急": "tasks", "帮记": "memo", "解惑": "qa", "存知": "knowledge",
+                "解异": "anomaly", "周报": "weekly", "回收站": "trash"}.get(name, "tasks")
 
     def switch_page(self, idx: int):
         if not self.search_mode:
@@ -349,7 +379,12 @@ class MainWindow(QMainWindow):
         for i, b in enumerate(self.navButtons):
             b.setChecked(i == idx)
         self.stack.setCurrentIndex(idx)
-        self.pages[idx].refresh()
+        if idx < len(self.pages):
+            self.pages[idx].refresh()
+        elif idx == len(self.pages):
+            self.weeklyPage.refresh()
+        elif idx == len(self.pages) + 1:
+            self.trashPage.refresh()
 
     # ---- 全局搜索 ----
 
@@ -435,6 +470,8 @@ class MainWindow(QMainWindow):
     def _update_status(self):
         d = self.store.data
         self.lblCounts.setText(
-            f"任务 {len(d['tasks'])} · 备忘 {len(d['memos'])} · 问题 {len(d['questions'])} · SOP {len(d['sops'])}")
+            f"任务 {len(d['tasks'])} · 备忘 {len(d['memos'])} · 问题 {len(d['questions'])}"
+            f" · SOP {len(d['sops'])} · 异常 {len(d['anomalies'])}"
+            f" · 回收站 {len(d['trash'])}")
         self.lblDataPath.setText(f"数据目录：{self.store.data_dir}")
         self._check_reminders()

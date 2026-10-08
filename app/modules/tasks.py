@@ -16,6 +16,8 @@ from PySide6.QtWidgets import (
 from .. import common
 from ..data_store import PRIORITIES, PRIORITY_ORDER, STATUS_DONE, STATUS_TODO
 from ..dialogs import TaskDialog
+from ..more_dialogs import DailyTaskDialog
+from ..holidays import HolidayCalendar
 from ..search import SearchRecord
 
 _PRIORITY_COLOR = {"高": "#ff6b6b", "中": "#ffb64d", "低": "#29c6ff", "弱": "#7d92ad"}
@@ -104,7 +106,42 @@ class TaskModule(QWidget):
         self.tableDone = self._make_table()
         self.tabs.addTab(self._wrap(self.tableTodo), "进行中")
         self.tabs.addTab(self._wrap(self.tableDone), "已完成事项")
+        self.tabs.addTab(self._make_daily_tab(), "每日任务")
         lay.addWidget(self.tabs, 1)
+
+        # 节假日日历（data/holidays.json，可编辑；供每日任务跳过节假日）
+        self.calendar = HolidayCalendar(store.data_dir)
+        self._daily_generated_note = ""
+
+    def _make_daily_tab(self) -> QWidget:
+        box = QWidget()
+        v = QVBoxLayout(box)
+        v.setContentsMargins(0, 6, 0, 0)
+        v.setSpacing(6)
+        head = QHBoxLayout()
+        self.lblDailyStatus = QLabel("")
+        self.lblDailyStatus.setObjectName("muted")
+        btnAdd = QPushButton("＋ 新增每日任务")
+        btnAdd.setObjectName("primary")
+        btnAdd.clicked.connect(self.add_daily)
+        head.addWidget(self.lblDailyStatus)
+        head.addStretch(1)
+        head.addWidget(btnAdd)
+        v.addLayout(head)
+
+        self.tableDaily = QTableWidget(0, 6)
+        self.tableDaily.setHorizontalHeaderLabels(
+            ["任务内容", "难点", "优先级", "到期时刻", "状态", "操作"])
+        self.tableDaily.verticalHeader().setVisible(False)
+        self.tableDaily.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tableDaily.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        h = self.tableDaily.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.Stretch)
+        h.setSectionResizeMode(1, QHeaderView.Stretch)
+        for col in (2, 3, 4, 5):
+            h.setSectionResizeMode(col, QHeaderView.ResizeToContents)
+        v.addWidget(self.tableDaily, 1)
+        return box
 
     def _wrap(self, w):
         box = QWidget()
@@ -145,6 +182,7 @@ class TaskModule(QWidget):
         self.lblCount.setText(
             f"进行中 {len(todo)} 项（逾期 {len(g['逾期'])} · 今日到期 {len(g['今日'])}）"
             f"· 已完成 {len(done)} 项")
+        self._fill_daily()
 
     def _sort_key(self, t):
         if self.cbSort.currentIndex() == 0:  # 优先级：高中低弱，再按due day
@@ -267,6 +305,86 @@ class TaskModule(QWidget):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if ret == QMessageBox.Yes:
             self.store.delete("tasks", task_id)
+
+    # ---------- 每日任务 ----------
+
+    def _fill_daily(self):
+        dailies = self.store.data["dailies"]
+        self.tableDaily.clearContents()
+        self.tableDaily.setRowCount(len(dailies))
+        today = datetime.today()
+        work = self.calendar.is_workday(today)
+        done_ids = {t.get("daily_id") for t in self.store.data["tasks"]
+                    if t.get("daily_date") == today.strftime("%Y-%m-%d")}
+        if self._daily_generated_note:
+            note = self._daily_generated_note
+        elif not work:
+            note = f"今天（{today.strftime('%m-%d')}）是休息日（周末/节假日），每日任务自动跳过"
+        else:
+            note = f"今天（{today.strftime('%m-%d')}）是工作日，每日任务已自动生成"
+        self.lblDailyStatus.setText(f"{note} · 模板 {len(dailies)} 条")
+
+        for row, d in enumerate(dailies):
+            self.tableDaily.setItem(row, 0, QTableWidgetItem(d.get("desc", "")))
+            self.tableDaily.setItem(row, 1, QTableWidgetItem(d.get("difficulty", "")))
+            pri = QTableWidgetItem(d.get("priority", ""))
+            pri.setTextAlignment(Qt.AlignCenter)
+            pri.setData(Qt.ForegroundRole, self._color(
+                _PRIORITY_COLOR.get(d.get("priority"), "#d7e3f4")))
+            self.tableDaily.setItem(row, 2, pri)
+            self.tableDaily.setItem(row, 3, QTableWidgetItem(d.get("due_time", "")))
+            state = QTableWidgetItem("已启用" if d.get("enabled") else "已停用")
+            state.setTextAlignment(Qt.AlignCenter)
+            self.tableDaily.setItem(row, 4, state)
+
+            bar = QWidget()
+            hb = QHBoxLayout(bar)
+            hb.setContentsMargins(4, 2, 4, 2)
+            hb.setSpacing(4)
+            did = d["id"]
+            btnToggle = QPushButton("停用" if d.get("enabled") else "启用")
+            btnToggle.clicked.connect(lambda _, i=did: self.toggle_daily(i))
+            hb.addWidget(btnToggle)
+            btnEdit = QPushButton("编辑")
+            btnEdit.clicked.connect(lambda _, i=did: self.edit_daily(i))
+            hb.addWidget(btnEdit)
+            btnDel = QPushButton("删除")
+            btnDel.setObjectName("danger")
+            btnDel.clicked.connect(lambda _, i=did: self.delete_daily(i))
+            hb.addWidget(btnDel)
+            self.tableDaily.setCellWidget(row, 5, bar)
+            self.tableDaily.setRowHeight(row, 40)
+
+    def add_daily(self):
+        dlg = DailyTaskDialog(self)
+        if dlg.exec() == DailyTaskDialog.Accepted:
+            f = dlg.fields()
+            if not f["desc"]:
+                QMessageBox.warning(self, "提示", "任务内容不能为空")
+                return
+            self.store.add_daily(f["desc"], f["difficulty"], f["priority"], f["due_time"])
+
+    def edit_daily(self, daily_id):
+        d = self.store.find("dailies", daily_id)
+        if not d:
+            return
+        dlg = DailyTaskDialog(self, daily=d)
+        if dlg.exec() == DailyTaskDialog.Accepted:
+            f = dlg.fields()
+            if not f["desc"]:
+                QMessageBox.warning(self, "提示", "任务内容不能为空")
+                return
+            self.store.update_daily(daily_id, **f)
+
+    def toggle_daily(self, daily_id):
+        d = self.store.find("dailies", daily_id)
+        if d:
+            self.store.update_daily(daily_id, enabled=not d.get("enabled", True))
+
+    def delete_daily(self, daily_id):
+        d = self.store.find("dailies", daily_id)
+        if d and self.confirm_delete(f"{d.get('desc', '')}\n\n（记录进入回收站，保留3天）"):
+            self.store.delete("dailies", daily_id)
 
     # ---------- 全局搜索接入 ----------
 

@@ -90,6 +90,41 @@ def _draw_nav(p: QPainter, rect: QRectF, kind: str):
         for y in (8, 11.5, 15):
             p.drawLine(QPointF(11.5, y), QPointF(17.5, y))
 
+    elif kind == "anomaly":  # 解异：警告三角
+        _pen(p, c, 1.6, rect)
+        path = QPainterPath()
+        path.moveTo(12, 3.5)
+        path.lineTo(21, 19.5)
+        path.lineTo(3, 19.5)
+        path.closeSubpath()
+        p.setBrush(QColor(41, 198, 255, 50))
+        p.drawPath(path)
+        _pen(p, c, 2.0, rect)
+        p.drawLine(QPointF(12, 9), QPointF(12, 14))
+        p.drawEllipse(QPointF(12, 17), 0.4, 0.4)
+
+    elif kind == "weekly":  # 周报：日历
+        _pen(p, DIM, 1.6, rect)
+        p.drawRoundedRect(QRectF(3.5, 5, 17, 15.5), 2, 2)
+        p.drawLine(QPointF(3.5, 9.5), QPointF(20.5, 9.5))
+        _pen(p, c, 1.6, rect)
+        p.drawLine(QPointF(8, 3), QPointF(8, 6.5))
+        p.drawLine(QPointF(16, 3), QPointF(16, 6.5))
+        for x in (7.5, 11, 14.5):
+            p.drawLine(QPointF(x, 13), QPointF(x, 13))
+        _pen(p, c, 1.8, rect)
+        p.drawLine(QPointF(7.5, 16), QPointF(9.5, 18))
+        p.drawLine(QPointF(9.5, 18), QPointF(13.5, 13.5))
+
+    elif kind == "trash":  # 回收站：垃圾桶
+        _pen(p, DIM, 1.6, rect)
+        p.drawRoundedRect(QRectF(6, 7, 12, 13.5), 2, 2)
+        p.drawLine(QPointF(4.5, 7), QPointF(19.5, 7))
+        p.drawLine(QPointF(9.5, 4.5), QPointF(14.5, 4.5))
+        _pen(p, c, 1.6, rect)
+        p.drawLine(QPointF(10, 10), QPointF(10, 17.5))
+        p.drawLine(QPointF(14, 10), QPointF(14, 17.5))
+
 
 def search_icon() -> QIcon:
     def draw(p, rect):

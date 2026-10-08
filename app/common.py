@@ -9,7 +9,7 @@ import uuid
 from datetime import datetime
 
 APP_NAME = "贾维斯 Jarvis"
-APP_VERSION = "v1.2.1"
+APP_VERSION = "v1.3.0"
 
 DT_FORMAT = "%Y-%m-%d %H:%M"        # Python strftime 语法（数据存储/strptime 用）
 D_FORMAT = "%Y-%m-%d"

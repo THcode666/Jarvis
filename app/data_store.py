@@ -4,13 +4,20 @@
 数据结构（data/jarvis_data.json）：
 {
   "tasks":     [ {id, desc, difficulty, start_time, due_day, priority, status,
-                    created_at, completed_at} ],
+                    created_at, completed_at, [daily_id, daily_date]} ],
   "memos":     [ {id, content, time, created_at} ],
   "questions": [ {id, question, time, solution, created_at} ],
   "sops":      [ {id, title, content, attachments: [{name, stored, kind, text}],
-                    created_at} ]
+                    created_at} ],
+  "dailies":   [ {id, desc, difficulty, priority, due_time "HH:MM", enabled,
+                    created_at} ],
+  "anomalies": [ {id, title, background, impact, lesson, actions, root_cause,
+                    prevention, images: [附件], timeline: [{time, event}],
+                    fishbone: {人:[], 机:[], 料:[], 法:[], 环:[]}, created_at} ],
+  "trash":     [ {id(=原记录id), module, item, deleted_at} ]
 }
 附件实体文件保存在 data/attachments/ 下，记录里只存文件名。
+删除一律先进回收站（保留3天），清空回收站或过期自动清除时才真正删附件文件。
 
 新增一种记录类型时：加一个 collection + 对应 add/update/delete 方法即可。
 """
@@ -18,7 +25,7 @@ import json
 import os
 import shutil
 import zipfile
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from PySide6.QtCore import QObject, Signal
 
@@ -33,7 +40,8 @@ STATUS_DONE = "已完成"
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".bmp", ".gif", ".webp"}
 PPT_EXTS = {".pptx", ".ppt"}
 
-_DATA_KEYS = ["tasks", "memos", "questions", "sops"]
+_DATA_KEYS = ["tasks", "memos", "questions", "sops", "dailies", "anomalies", "trash"]
+TRASH_KEEP_DAYS = 3
 
 
 class DataStore(QObject):
@@ -49,6 +57,7 @@ class DataStore(QObject):
         os.makedirs(self.attach_dir, exist_ok=True)
         self.data = {k: [] for k in _DATA_KEYS}
         self.load()
+        self.purge_trash()  # 回收站超过保留期的彻底清除
         self.backup_json()
 
     # ---------- 持久化 ----------
@@ -206,6 +215,37 @@ class DataStore(QObject):
                 item[key] = fields[key]
         self._emit()
 
+    # ---------- 解异：异常 ----------
+
+    def add_anomaly(self, title, fields: dict) -> dict:
+        item = {
+            "id": common.new_id(),
+            "title": title.strip(),
+            "background": fields.get("background", ""),
+            "impact": fields.get("impact", ""),
+            "lesson": fields.get("lesson", ""),
+            "actions": fields.get("actions", ""),
+            "root_cause": fields.get("root_cause", ""),
+            "prevention": fields.get("prevention", ""),
+            "images": fields.get("images", []),
+            "timeline": fields.get("timeline", []),
+            "fishbone": fields.get("fishbone", {}),
+            "created_at": common.now_str(),
+        }
+        self.data["anomalies"].append(item)
+        self._emit()
+        return item
+
+    def update_anomaly(self, item_id, **fields):
+        item = self.find("anomalies", item_id)
+        if not item:
+            return
+        for key in ("title", "background", "impact", "lesson", "actions",
+                    "root_cause", "prevention", "images", "timeline", "fishbone"):
+            if key in fields:
+                item[key] = fields[key]
+        self._emit()
+
     # ---------- 存知：SOP ----------
 
     def add_sop(self, title, content, attachments=None) -> dict:
@@ -238,16 +278,143 @@ class DataStore(QObject):
         return None
 
     def delete(self, collection: str, item_id: str) -> bool:
+        """删除 = 移入回收站，保留3天，可恢复。彻底删除见 purge_trash。"""
         item = self.find(collection, item_id)
         before = len(self.data[collection])
         self.data[collection] = [x for x in self.data[collection] if x.get("id") != item_id]
         if len(self.data[collection]) != before:
-            if collection == "sops" and item:
-                for att in item.get("attachments", []):
-                    self.remove_attachment_file(att.get("stored", ""))
+            self.data["trash"].append({
+                "id": item_id,
+                "module": collection,
+                "item": item,
+                "deleted_at": common.now_str(),
+            })
             self._emit()
             return True
         return False
+
+    # ---------- 回收站 ----------
+
+    def restore(self, trash_id: str) -> bool:
+        """从回收站恢复一条记录（按原id放回原模块）。"""
+        entry = self.find("trash", trash_id)
+        if not entry:
+            return False
+        module, item = entry["module"], entry["item"]
+        if not any(x.get("id") == item.get("id") for x in self.data[module]):
+            self.data[module].append(item)
+        self.data["trash"] = [x for x in self.data["trash"] if x.get("id") != trash_id]
+        self._emit()
+        return True
+
+    def purge_trash(self, keep_days: int = TRASH_KEEP_DAYS, all_items: bool = False) -> int:
+        """彻底清除回收站：默认清掉超过 keep_days 天的记录（all_items=True 清空）。
+
+        SOP 的附件实体文件在此刻才真正删除。
+        """
+        now = datetime.now()
+        expire = now - timedelta(days=keep_days)
+        keep, removed = [], 0
+        for entry in self.data["trash"]:
+            expired = all_items
+            if not expired:
+                try:
+                    expired = datetime.strptime(entry["deleted_at"][:16],
+                                                common.DT_FORMAT) <= expire
+                except ValueError:
+                    expired = True  # 时间字段异常视为过期
+            if expired:
+                removed += 1
+                if entry["module"] == "sops":
+                    for att in (entry.get("item") or {}).get("attachments", []):
+                        self.remove_attachment_file(att.get("stored", ""))
+            else:
+                keep.append(entry)
+        if removed:
+            self.data["trash"] = keep
+            self._emit()
+        return removed
+
+    def purge_one(self, trash_id: str) -> bool:
+        """彻底删除回收站里的单条记录（SOP附件文件一并删除）。"""
+        entry = self.find("trash", trash_id)
+        if not entry:
+            return False
+        if entry["module"] == "sops":
+            for att in (entry.get("item") or {}).get("attachments", []):
+                self.remove_attachment_file(att.get("stored", ""))
+        self.data["trash"] = [x for x in self.data["trash"] if x.get("id") != trash_id]
+        self._emit()
+        return True
+
+    def trash_age_text(self, deleted_at: str) -> str:
+        """显示剩余保留时间。"""
+        try:
+            d = datetime.strptime(deleted_at[:16], common.DT_FORMAT)
+        except ValueError:
+            return "剩余不足1小时"
+        left = timedelta(days=TRASH_KEEP_DAYS) - (datetime.now() - d)
+        hours = max(0, int(left.total_seconds() // 3600))
+        return f"剩余约{hours}小时" if hours >= 1 else "即将清除"
+
+    # ---------- 每日任务 ----------
+
+    def add_daily(self, desc, difficulty, priority, due_time, enabled=True) -> dict:
+        d = {
+            "id": common.new_id(),
+            "desc": desc.strip(),
+            "difficulty": difficulty.strip(),
+            "priority": priority if priority in PRIORITIES else "中",
+            "due_time": due_time or "17:30",
+            "enabled": bool(enabled),
+            "created_at": common.now_str(),
+        }
+        self.data["dailies"].append(d)
+        self._emit()
+        return d
+
+    def update_daily(self, daily_id, **fields):
+        d = self.find("dailies", daily_id)
+        if not d:
+            return
+        for key in ("desc", "difficulty", "priority", "due_time", "enabled"):
+            if key in fields:
+                d[key] = fields[key]
+        self._emit()
+
+    def ensure_daily_instances(self, calendar, today=None) -> int:
+        """为今天生成每日任务实例：仅工作日（周一至五且非节假日），每天每模板一条。
+
+        返回新建条数。实例是普通任务，带 daily_id/daily_date 标记。
+        """
+        today = today or datetime.now()
+        key = today.strftime("%Y-%m-%d")
+        if not calendar.is_workday(today):
+            return 0
+        created = 0
+        for d in self.data["dailies"]:
+            if not d.get("enabled"):
+                continue
+            if any(t.get("daily_id") == d["id"] and t.get("daily_date") == key
+                   for t in self.data["tasks"]):
+                continue
+            self.data["tasks"].append({
+                "id": common.new_id(),
+                "desc": d["desc"],
+                "difficulty": d.get("difficulty", ""),
+                "start_time": f"{key} 08:00",
+                "due_day": f"{key} {d.get('due_time', '17:30')}",
+                "priority": d.get("priority", "中"),
+                "status": STATUS_TODO,
+                "created_at": common.now_str(),
+                "completed_at": "",
+                "daily_id": d["id"],
+                "daily_date": key,
+            })
+            created += 1
+        if created:
+            self._emit()
+        return created
 
     # ---------- 附件管理（存知模块） ----------
 

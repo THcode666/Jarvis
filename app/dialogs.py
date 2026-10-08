@@ -6,17 +6,19 @@
 import os
 from datetime import datetime
 
-from PySide6.QtCore import QDateTime, Qt, QSize
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QDateTime, QTime, Qt, QSize
+from PySide6.QtGui import QPixmap, QImage
 from PySide6.QtWidgets import (
     QComboBox, QDateTimeEdit, QDialog, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
-    QPlainTextEdit, QPushButton, QVBoxLayout, QWidget, QDialogButtonBox,
-    QAbstractItemView,
+    QPlainTextEdit, QPushButton, QTableWidget, QTabWidget, QVBoxLayout, QWidget,
+    QDialogButtonBox, QAbstractItemView, QHeaderView, QCheckBox,
 )
 
 from . import common
 from .data_store import PRIORITIES
+
+FISHBONE_CATS = ["人", "机", "料", "法", "环"]
 
 
 def to_qdatetime(value: str):
@@ -317,4 +319,3 @@ class ImageViewDialog(QDialog):
         lay = QVBoxLayout(self)
         lay.setContentsMargins(4, 4, 4, 4)
         lay.addWidget(area)
-

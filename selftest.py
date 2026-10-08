@@ -135,12 +135,131 @@ def test_data_layer(tmp):
           and fixed["start_time"] == "2026-10-05 09:30")
     store4.delete("tasks", "badfix1")
 
-    # 删除（SOP附件随之删除）
+    # 删除（SOP附件文件保留到回收站彻底清除时才删）
     did = sop1["id"]
     stored_name = att_ppt["stored"]
     store2.delete("sops", did)
-    check("删除SOP并清理附件", not os.path.exists(store2.attachment_path(stored_name)))
+    check("删除SOP进回收站(附件保留)",
+          not store2.find("sops", did)
+          and os.path.exists(store2.attachment_path(stored_name)))
+    store2.restore(did)
+    check("回收站恢复", store2.find("sops", did) is not None
+          and len(store2.data["trash"]) == 0)
+    store2.delete("sops", did)
+    n_purged = store2.purge_trash(all_items=True)
+    check("彻底清除时删除附件",
+          n_purged == 1 and not os.path.exists(store2.attachment_path(stored_name)))
     return store
+
+
+def test_new_features(store, tmp):
+    """v1.3.0：节假日/每日任务/回收站/周报/SVG图表/单页PPT。"""
+    from app.data_store import DataStore
+
+    print("== 1b. v1.3.0 新功能 ==")
+
+    # ---- 节假日日历 ----
+    from datetime import date
+    from app.holidays import HolidayCalendar
+    cal = HolidayCalendar(os.path.join(tmp, "cal_data"))
+    check("日历文件自动生成", os.path.exists(os.path.join(tmp, "cal_data", "holidays.json")))
+    check("工作日判断", cal.is_workday(date(2026, 3, 2)))          # 周一
+    check("周六非工作日", not cal.is_workday(date(2026, 3, 7)))
+    check("节假日跳过(国庆)", not cal.is_workday(date(2026, 10, 1)))
+    check("调休补班算工作日", cal.is_workday(date(2026, 10, 10)))
+
+    # ---- 每日任务 ----
+    fd = DataStore(os.path.join(tmp, "daily_data"))
+
+    class FakeCal:
+        def __init__(self, work):
+            self.work = work
+
+        def is_workday(self, d):
+            return self.work
+
+    fd.add_daily("机台点检", "看参数", "高", "17:00")
+    n = fd.ensure_daily_instances(FakeCal(True), today=datetime(2026, 10, 6, 9, 0))
+    check("工作日生成每日任务", n == 1 and len(fd.data["tasks"]) == 1
+          and fd.data["tasks"][0]["due_day"] == "2026-10-06 17:00")
+    n2 = fd.ensure_daily_instances(FakeCal(True), today=datetime(2026, 10, 6, 15, 0))
+    check("同日不重复生成", n2 == 0)
+    n3 = fd.ensure_daily_instances(FakeCal(False), today=datetime(2026, 10, 7, 9, 0))
+    check("休息日自动跳过", n3 == 0 and len(fd.data["tasks"]) == 1)
+
+    # ---- 回收站 ----
+    ft = DataStore(os.path.join(tmp, "trash_data"))
+    sop = ft.add_sop("回收站SOP", "内容")
+    att = ft.add_attachment(sop["id"], os.path.join(tmp, "img.png"))
+    ft.update_sop(sop["id"], attachments=[att])
+    ft.delete("sops", sop["id"])
+    check("删除进回收站", len(ft.data["trash"]) == 1 and not ft.data["sops"])
+    check("保留期内附件文件还在", os.path.exists(ft.attachment_path(att["stored"])))
+    tid = ft.data["trash"][0]["id"]
+    check("剩余时间文本", "剩余" in ft.trash_age_text(ft.data["trash"][0]["deleted_at"]))
+    ft.restore(tid)
+    check("恢复到原模块", ft.find("sops", sop["id"]) is not None
+          and len(ft.data["trash"]) == 0)
+    ft.delete("sops", sop["id"])
+    n = ft.purge_trash(keep_days=0)
+    check("过期/手动彻底清除删附件",
+          n == 1 and not os.path.exists(ft.attachment_path(att["stored"])))
+
+    # ---- 周报分组 ----
+    from app.modules.weekly import build_weeks, week_summary_text
+    wk_tasks = [
+        {"id": "1", "desc": "完成任务A", "status": "已完成", "difficulty": "",
+         "completed_at": "2026-10-06 15:00", "start_time": "2026-10-01 08:00",
+         "due_day": "2026-10-05", "created_at": "2026-10-01 08:00"},
+        {"id": "2", "desc": "进行中B", "status": "未完成", "difficulty": "",
+         "start_time": "2026-10-07 08:00", "due_day": "2026-10-08 17:00",
+         "created_at": "2026-10-06 08:00"},
+    ]
+    weeks = build_weeks(wk_tasks)
+    check("按周分组(周一为一周开始)", len(weeks) == 1
+          and weeks[0]["monday"].weekday() == 0)
+    check("周内时间轴倒序", weeks[0]["items"][0][2] is False)  # 进行中B时间更晚排在前
+    text = week_summary_text(weeks[0])
+    check("周总结文本", "已完成" in text and "完成任务A" in text and "进行中B" in text)
+
+    # ---- SVG 图表 ----
+    from app.svg_charts import timeline_svg, fishbone_svg, wrap_html
+    svg = timeline_svg([{"time": "10-08 08:00", "event": "结批报错E102"},
+                        {"time": "10-08 09:00", "event": "重插fiber恢复"}], "时间线")
+    check("时间线SVG生成", "<svg" in svg and "结批报错E102" in svg)
+    html = wrap_html(fishbone_svg({"人": ["疲劳"], "机": ["接口氧化"]}, "异常X"), "鱼骨")
+    check("鱼骨HTML五要素", all(c in html for c in ["人", "机", "料", "法", "环"])
+          and "异常X" in html and "<svg" in html)
+
+    # ---- 单页PPT ----
+    from app.ppt_report import generate_ppt
+    import zipfile as _zf
+    out_pptx = os.path.join(tmp, "report.pptx")
+    make_test_image(os.path.join(tmp, "ppt_img.png"))
+    anomaly = {"title": "lot结批报错E102", "background": "结批时报错设备停机",
+               "impact": "交付延迟2小时", "lesson": "去年12月发生过类似故障",
+               "actions": "重启重插fiber", "root_cause": "fiber接口氧化",
+               "prevention": "点检表增加清洁项"}
+    generate_ppt(anomaly, [os.path.join(tmp, "ppt_img.png")], out_pptx)
+    with _zf.ZipFile(out_pptx) as z:
+        names = z.namelist()
+        slides = [n for n in names
+                  if n.startswith("ppt/slides/slide") and n.endswith(".xml")
+                  and "rels" not in n]
+        xml = z.read("ppt/slides/slide1.xml").decode("utf-8")
+    check("PPT只有一页", len(slides) == 1)
+    check("PPT含标题与六要素", "lot结批报错E102" in xml
+          and "What's the impact" in xml and "Root cause" in xml
+          and "Lesson learned" in xml)
+    check("PPT嵌入图片", any(n.startswith("ppt/media/") for n in names))
+
+    # 解异数据方法
+    an = store.add_anomaly("测试异常", {"background": "b",
+                                        "timeline": [{"time": "t", "event": "e"}]})
+    store.update_anomaly(an["id"], root_cause="rc")
+    check("解异增改", store.find("anomalies", an["id"])["root_cause"] == "rc")
+    store.delete("anomalies", an["id"])
+    store.purge_trash(all_items=True)
 
 
 def make_test_image(path):
@@ -265,6 +384,35 @@ def make_gui_store(tmp):
     store.add_memo("每周五下午17:00交周报", "2026-10-02 09:30")
     store.add_question("lot结批报错E102", "2026-10-01 13:00", "重插fiber后重试")
     store.add_question("prober卡针频率突然升高？", "2026-10-02 15:00", "")
+
+    # 上一周完成的任务（让周报出现多周）
+    old = store.add_task("上个月备件盘点", "", "2026-09-21 09:00", "2026-09-23", "低")
+    ot = store.find("tasks", old["id"])
+    ot["status"] = "已完成"
+    ot["completed_at"] = "2026-09-23 15:00"
+    store._emit()
+
+    # 解异样例：六要素+图片+时间线+鱼骨
+    from app import common as _cm
+    aid = _cm.new_id()
+    anom_img = os.path.join(tmp, "anom.png")
+    make_test_image(anom_img)
+    an_att = store.add_attachment(aid, anom_img)
+    store.add_anomaly("lot结批报错E102", {
+        "background": "10-08 08:15 lot A1024 结批时报错E102，设备停机。",
+        "impact": "该lot交付延迟约2小时。",
+        "lesson": "去年12月发生过一次类似的fiber故障。",
+        "actions": "重启设备、重插fiber、重新结批成功。",
+        "root_cause": "fiber接口氧化导致接触不良。",
+        "prevention": "点检表增加fiber接口清洁与紧固检查项。",
+        "images": [an_att],
+        "timeline": [{"time": "10-08 08:15", "event": "结批报错E102"},
+                     {"time": "10-08 08:20", "event": "上报并停机检查"},
+                     {"time": "10-08 09:00", "event": "重插fiber恢复"},
+                     {"time": "10-08 09:30", "event": "重新结批成功"}],
+        "fishbone": {"人": ["夜班疲劳"], "机": ["fiber接口氧化"], "料": [],
+                     "法": ["点检表缺fiber项"], "环": ["车间湿度偏高"]},
+    })
 
     img_path = os.path.join(tmp, "img.png")
     make_test_image(img_path)
@@ -413,6 +561,32 @@ def test_gui(store, tmp, shots_dir):
         _st = __import__("json").load(f)
     check("托盘开关已保存", _st.get("close_to_tray") is False)
 
+    # ---- v1.3.0 新页面 ----
+    check("导航结构(5模块+周报+回收站)", len(win.pages) == 5 and len(win.navButtons) == 7)
+    win.switch_page(4)  # 解异
+    shot("10_解异.png")
+    win.switch_page(5)  # 周报
+    check("周报周列表生成", win.weeklyPage.list.count() >= 1)
+    shot("11_周报.png")
+    win.switch_page(6)  # 回收站
+    shot("12_回收站.png")
+
+    # 删除一条备忘进回收站并恢复（GUI全链路）
+    memo = store.data["memos"][0]
+    store.delete("memos", memo["id"])
+    check("删除进回收站", len(store.data["trash"]) == 1)
+    win.switch_page(6)
+    shot("12b_回收站有内容.png")
+    store.restore(store.data["trash"][0]["id"])
+    check("从回收站恢复", store.find("memos", memo["id"]) is not None)
+
+    # 解异PPT全链路（含真实附件图片）
+    an = store.data["anomalies"][0]
+    out_pptx = os.path.join(tmp, "gui_report.pptx")
+    from app.ppt_report import generate_ppt
+    generate_ppt(an, [store.attachment_path(x["stored"]) for x in an["images"]], out_pptx)
+    check("GUI生成PPT文件", os.path.exists(out_pptx) and os.path.getsize(out_pptx) > 10000)
+
     # 搜索跳转逻辑
     win.open_search_result("sops", sop["id"], False)
     check("搜索跳转到存知", win.stack.currentIndex() == 3)
@@ -450,6 +624,9 @@ def main():
 
     print("== 1. 数据层 ==")
     store = test_data_layer(tmp)
+
+    print("== 1b. 新功能 ==")
+    test_new_features(store, tmp)
 
     print("== 2. 搜索 ==")
     test_search(store)
