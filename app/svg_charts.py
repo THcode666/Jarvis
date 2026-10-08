@@ -33,15 +33,36 @@ def _wrap(text: str, width: int, max_lines: int = 4):
 
 
 def timeline_svg(entries: list, title: str = "") -> str:
-    """entries: [{time, event}]，按给定顺序从左到右排布。"""
-    n = max(1, len(entries))
-    margin = 90
-    w = max(900, min(1900, 300 + n * 170))
-    half = (n + 1) // 2
-    block_h = 108
-    h = 170 + half * block_h
+    """entries: [{time, event}]，按给定顺序从左到右排布。
+
+    布局规则：
+    - 宽度随条目数自适应（每条约230px），同侧相邻文字永不重叠；
+    - 时间紧贴节点，事件文字向远离轴的方向堆叠（多行不会压到时间上）；
+    - 无连接竖线（避免穿过文字）；事件超长自动折行，最多4行。
+    """
+    entries = [e for e in entries if (e.get("time") or e.get("event"))]
+    n = len(entries)
+    if n == 0:
+        empty = ("有内容后这里会生成时间线")
+        return (f'<svg xmlns="http://www.w3.org/2000/svg" width="900" height="160" '
+                f'viewBox="0 0 900 160"><rect width="900" height="160" fill="#0d1728"/>'
+                f'<text x="450" y="84" text-anchor="middle" font-size="15" fill="#7d92ad" '
+                f'font-family="Microsoft YaHei">{_esc(empty)}</text></svg>')
+
+    margin = 120
+    w = max(1100, min(3800, 230 * n + 160))
+    step = (w - 2 * margin) / (n - 1) if n > 1 else 0
+
+    # 折行宽度：同侧相邻节点间距的一半再留边（居中文字互不侵入）
+    wrap_w = max(10, min(18, int((2 * step - 36) / 13)))
+    blocks = [_wrap(str(e.get("event", "")).strip(), wrap_w, 4) for e in entries]
+    max_lines = max(len(b) for b in blocks)
+
+    line_h = 18
+    time_gap = 32     # 轴到时间字的距离
+    half_h = time_gap + 14 + max_lines * line_h
+    h = half_h * 2 + 60 + (26 if title else 0)
     axis_y = h // 2
-    step = (w - 2 * margin) / max(1, n - 1) if n > 1 else 0
 
     parts = [
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{w}" height="{h}" '
@@ -52,34 +73,35 @@ def timeline_svg(entries: list, title: str = "") -> str:
     ]
     if title:
         parts.append(
-            f'<text x="{w / 2}" y="42" text-anchor="middle" font-size="20" '
+            f'<text x="{w / 2}" y="34" text-anchor="middle" font-size="20" '
             f'font-weight="bold" fill="#7adfff">{_esc(_wrap(title, 40)[0])}</text>')
-    # 主轴
     parts.append(
-        f'<line x1="{margin - 40}" y1="{axis_y}" x2="{w - margin + 46}" y2="{axis_y}" '
+        f'<line x1="{margin - 50}" y1="{axis_y}" x2="{w - margin + 56}" y2="{axis_y}" '
         f'stroke="#29c6ff" stroke-width="3" marker-end="url(#arrow)"/>')
 
     for i, e in enumerate(entries):
         x = margin + i * step if n > 1 else w / 2
         up = (i % 2 == 0)
-        sign = -1 if up else 1
-        # 节点
+        lines = blocks[i]
+
+        if up:
+            time_y = axis_y - 18
+            # 事件行堆在时间上方：最靠近时间的是第一行
+            base = time_y - 14 - (len(lines) - 1) * line_h
+            for j, ln in enumerate(lines):
+                parts.append(f'<text x="{x:.0f}" y="{base + j * line_h}" text-anchor="middle" '
+                             f'font-size="13" fill="#d7e3f4">{_esc(ln)}</text>')
+        else:
+            time_y = axis_y + 28
+            base = time_y + 16
+            for j, ln in enumerate(lines):
+                parts.append(f'<text x="{x:.0f}" y="{base + j * line_h}" text-anchor="middle" '
+                             f'font-size="13" fill="#d7e3f4">{_esc(ln)}</text>')
+
+        parts.append(f'<text x="{x:.0f}" y="{time_y}" text-anchor="middle" font-size="14" '
+                     f'font-weight="bold" fill="#ffd166">{_esc(str(e.get("time", "")).strip())}</text>')
         parts.append(f'<circle cx="{x:.0f}" cy="{axis_y}" r="7" fill="#0d1728" '
                      f'stroke="#29c6ff" stroke-width="3"/>')
-        # 时间（节点旁）
-        ty = axis_y + sign * 26
-        parts.append(f'<text x="{x:.0f}" y="{ty}" text-anchor="middle" font-size="14" '
-                     f'font-weight="bold" fill="#ffd166">{_esc(e.get("time", ""))}</text>')
-        # 事件文本块（时间外侧）
-        lines = _wrap(e.get("event", ""), 15, 4)
-        by = axis_y + sign * (44 + (0 if up else -6))
-        parts.append(f'<line x1="{x:.0f}" y1="{axis_y + sign * 12}" '
-                     f'x2="{x:.0f}" y2="{by + (0 if up else len(lines) * 19 - 6)}" '
-                     f'stroke="#3a5a85" stroke-width="1.5"/>')
-        for j, ln in enumerate(lines):
-            ly = by + (j * 19 if up else -(j * 19) + 6)
-            parts.append(f'<text x="{x:.0f}" y="{ly}" text-anchor="middle" '
-                         f'font-size="13" fill="#d7e3f4">{_esc(ln)}</text>')
 
     parts.append("</svg>")
     return "\n".join(parts)

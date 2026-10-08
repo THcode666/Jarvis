@@ -23,6 +23,35 @@ _FISHBONE_EN = {"人": "Man", "机": "Machine", "料": "Material",
                 "法": "Method", "环": "Environment"}
 
 
+# ---- 对话框尺寸记忆（数据目录 dialog_sizes.json） ----
+
+def load_dialog_size(store, key: str, default_w: int, default_h: int):
+    try:
+        import json
+        p = os.path.join(store.data_dir, "dialog_sizes.json")
+        with open(p, encoding="utf-8") as f:
+            data = json.load(f)
+        w, h = data.get(key, [default_w, default_h])
+        return max(400, int(w)), max(320, int(h))
+    except Exception:
+        return default_w, default_h
+
+
+def save_dialog_size(store, key: str, w: int, h: int):
+    try:
+        import json
+        p = os.path.join(store.data_dir, "dialog_sizes.json")
+        data = {}
+        if os.path.exists(p):
+            with open(p, encoding="utf-8") as f:
+                data = json.load(f)
+        data[key] = [int(w), int(h)]
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+    except Exception:
+        pass
+
+
 class DailyTaskDialog(QDialog):
     """缓急 - 每日任务模板：工作日自动生成，节假日/周末自动跳过。"""
 
@@ -87,7 +116,13 @@ class AnomalyDialog(QDialog):
         self.attachments = [dict(a) for a in (item.get("images", []) if item else [])]
         self.removed = []
         self.setWindowTitle("编辑异常" if item else "新增异常")
-        self.setMinimumSize(660, 620)
+        self.setMinimumSize(600, 480)
+        # 可调整大小 + 最大化按钮，并记住上次的窗口尺寸
+        self.setWindowFlags(self.windowFlags() | Qt.WindowMinMaxButtonsHint)
+        if store:
+            self.resize(*load_dialog_size(store, "anomaly", 680, 620))
+        else:
+            self.resize(680, 620)
 
         tabs = QTabWidget()
         tabs.addTab(self._make_basic_tab(item or {}), "概况（六要素）")
@@ -99,6 +134,11 @@ class AnomalyDialog(QDialog):
         lay.addWidget(tabs, 1)
         lay.addWidget(_buttons(self))
         self._reload_att_list()
+
+    def hideEvent(self, event):
+        if self.store:
+            save_dialog_size(self.store, "anomaly", self.width(), self.height())
+        super().hideEvent(event)
 
     # ---- 概况 ----
 
@@ -227,20 +267,29 @@ class AnomalyDialog(QDialog):
         v.setContentsMargins(4, 8, 4, 4)
         v.setSpacing(4)
         v.addWidget(QLabel("按时间顺序填：什么时间做了什么。预览/导出时会生成从左到右的时间线。"))
-        v.addWidget(QLabel("时间格式建议：10-08 08:15 或 2026-10-08 08:15"))
+        v.addWidget(QLabel("时间格式建议：10-08 08:15 或 2026-10-08 08:15；顺序不对可用 ↑↓ 调整。"))
         self.tlTable = QTableWidget(0, 2)
         self.tlTable.setHorizontalHeaderLabels(["时间", "做了什么"])
         self.tlTable.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
         self.tlTable.setColumnWidth(0, 170)  # 容纳 2026-10-08 08:15 完整显示
         self.tlTable.verticalHeader().setVisible(False)
+        self.tlTable.verticalHeader().setDefaultSectionSize(34)
+
         h = QHBoxLayout()
         btnAdd = QPushButton("＋ 添加一行")
-        btnAdd.clicked.connect(lambda: self.tlTable.insertRow(self.tlTable.rowCount()))
+        btnAdd.setObjectName("primary")
+        btnAdd.clicked.connect(lambda: self._tl_add())
+        btnUp = QPushButton("↑ 上移")
+        btnUp.setToolTip("把选中的行往前移（时间线更靠左）")
+        btnUp.clicked.connect(lambda: self._tl_move(-1))
+        btnDown = QPushButton("↓ 下移")
+        btnDown.setToolTip("把选中的行往后移（时间线更靠右）")
+        btnDown.clicked.connect(lambda: self._tl_move(1))
         btnDel = QPushButton("删除选中行")
         btnDel.setObjectName("danger")
-        btnDel.clicked.connect(lambda: self.tlTable.removeRow(self.tlTable.currentRow()))
-        h.addWidget(btnAdd)
-        h.addWidget(btnDel)
+        btnDel.clicked.connect(self._tl_del)
+        for b in (btnAdd, btnUp, btnDown, btnDel):
+            h.addWidget(b)
         h.addStretch(1)
         v.addLayout(h)
         v.addWidget(self.tlTable, 1)
@@ -250,8 +299,39 @@ class AnomalyDialog(QDialog):
             self.tlTable.setItem(r, 0, QTableWidgetItem(e.get("time", "")))
             self.tlTable.setItem(r, 1, QTableWidgetItem(e.get("event", "")))
         if self.tlTable.rowCount() == 0:
-            self.tlTable.insertRow(0)
+            self._tl_add(autofocus=False)
         return w
+
+    def _tl_add(self, autofocus=True):
+        r = self.tlTable.rowCount()
+        self.tlTable.insertRow(r)
+        self.tlTable.setItem(r, 0, QTableWidgetItem(""))
+        self.tlTable.setItem(r, 1, QTableWidgetItem(""))
+        if autofocus:
+            self.tlTable.setCurrentCell(r, 0)
+            self.tlTable.setFocus()
+            self.tlTable.editItem(self.tlTable.item(r, 0))  # 直接进入时间单元格编辑
+
+    def _tl_move(self, delta):
+        r = self.tlTable.currentRow()
+        t = r + delta
+        n = self.tlTable.rowCount()
+        if r < 0 or not (0 <= t < n):
+            return
+        vals = {}
+        for row in (r, t):
+            vals[row] = [(self.tlTable.item(row, c).text()
+                          if self.tlTable.item(row, c) else "")
+                         for c in range(self.tlTable.columnCount())]
+        for c in range(self.tlTable.columnCount()):
+            self.tlTable.setItem(r, c, QTableWidgetItem(vals[t][c]))
+            self.tlTable.setItem(t, c, QTableWidgetItem(vals[r][c]))
+        self.tlTable.setCurrentCell(t, 0)
+
+    def _tl_del(self):
+        r = self.tlTable.currentRow()
+        if r >= 0:
+            self.tlTable.removeRow(r)
 
     # ---- 鱼骨图 ----
 
@@ -308,13 +388,20 @@ class AnomalyDialog(QDialog):
 
 
 class ChartPreviewDialog(QDialog):
-    """SVG 图表预览（时间线/鱼骨图），支持导出 HTML。"""
+    """SVG 图表预览（时间线/鱼骨图），支持导出 HTML。可调整大小并记住尺寸。"""
 
-    def __init__(self, svg: str, title: str, parent=None, default_name="chart.html"):
+    def __init__(self, svg: str, title: str, parent=None, default_name="chart.html",
+                 store=None):
         super().__init__(parent)
         self.svg = svg
+        self.store = store
         self.setWindowTitle(title)
-        self.resize(1150, 680)
+        self.setMinimumSize(700, 450)
+        self.setWindowFlags(self.windowFlags() | Qt.WindowMinMaxButtonsHint)
+        if store:
+            self.resize(*load_dialog_size(store, "chart", 1150, 680))
+        else:
+            self.resize(1150, 680)
 
         from PySide6.QtGui import QPainter
         from PySide6.QtSvg import QSvgRenderer
@@ -352,6 +439,11 @@ class ChartPreviewDialog(QDialog):
         h.addWidget(btnHtml)
         h.addWidget(btnClose)
         lay.addLayout(h)
+
+    def hideEvent(self, event):
+        if self.store:
+            save_dialog_size(self.store, "chart", self.width(), self.height())
+        super().hideEvent(event)
 
     def _export_html(self, title, default_name):
         from .svg_charts import wrap_html

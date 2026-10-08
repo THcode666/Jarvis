@@ -601,6 +601,38 @@ def test_gui(store, tmp, shots_dir):
     pal_txt = win.palette().color(win.palette().ColorRole.Text).name()
     check("全局深色调色板生效", pal_txt.lower() in ("#d7e3f4", "#d7e3f4 ".strip()))
 
+    # ---- v1.3.2：时间线SVG重排版 / 编辑器优化 / 对话框尺寸记忆 ----
+    many = [{"time": f"10-08 0{m}:15", "event": "事件" * 10} for m in range(1, 9)]
+    from app import svg_charts as _sc
+    svg8 = _sc.timeline_svg(many, "多条目时间线")
+    check("时间线宽度随条目自适应", 'width="' in svg8 and
+          int(svg8.split('width="')[1].split('"')[0]) >= 200 * 8)
+    check("时间线不截断72字内事件", "…" not in svg8.split("<text")[2])  # 标题段之外无省略号
+    from PySide6.QtCore import QDate as _QD
+
+    adlg2 = AnomalyDialog(store=store, item=an)
+    n0 = adlg2.tlTable.rowCount()
+    adlg2._tl_add(autofocus=False)
+    check("时间线添加行", adlg2.tlTable.rowCount() == n0 + 1)
+    from PySide6.QtWidgets import QTableWidgetItem as _TWI
+    adlg2.tlTable.setItem(n0, 0, _TWI("b"))
+    adlg2.tlTable.setCurrentCell(n0, 0)
+    adlg2._tl_move(-1)
+    check("时间线上移交换", adlg2.tlTable.item(n0 - 1, 0).text() == "b")
+    adlg2._tl_del()
+    check("时间线删除行", adlg2.tlTable.rowCount() == n0)
+    adlg2.resize(900, 700)
+    adlg2.show()
+    app.processEvents()
+    adlg2.close()  # 触发尺寸保存
+    import json as _json
+    with open(os.path.join(store.data_dir, "dialog_sizes.json"), encoding="utf-8") as f:
+        _ds = _json.load(f)
+    check("对话框尺寸已记忆", _ds.get("anomaly") == [900, 700])
+    adlg3 = AnomalyDialog(store=store, item=an)
+    check("对话框恢复记忆尺寸", adlg3.width() == 900 and adlg3.height() == 700)
+    adlg3.close()
+
     # 搜索跳转逻辑
     win.open_search_result("sops", sop["id"], False)
     check("搜索跳转到存知", win.stack.currentIndex() == 3)

@@ -270,7 +270,8 @@ class AnomalyModule(QWidget):
             return
         svg = svg_charts.timeline_svg(a["timeline"], title=a.get("title", "时间线分析"))
         ChartPreviewDialog(svg, f"时间线 · {a.get('title', '')}", self,
-                           f"timeline_{common.today_str()}.html").exec()
+                           f"timeline_{common.today_str()}.html",
+                           store=self.store).exec()
 
     def preview_fishbone(self):
         a = self._current()
@@ -278,7 +279,8 @@ class AnomalyModule(QWidget):
             return
         svg = svg_charts.fishbone_svg(a.get("fishbone", {}), problem=a.get("title", ""))
         ChartPreviewDialog(svg, f"鱼骨图 · {a.get('title', '')}", self,
-                           f"fishbone_{common.today_str()}.html").exec()
+                           f"fishbone_{common.today_str()}.html",
+                           store=self.store).exec()
 
     def generate_ppt(self):
         a = self._current()
