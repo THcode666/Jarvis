@@ -17,6 +17,35 @@ DANGER    = "#ff6b6b"
 WARN      = "#ffb64d"
 OK        = "#3ddc97"
 
+
+def apply_dark_palette(app):
+    """全局深色调色板：QSS 覆盖不到的原生部件（表格项文本、日历弹窗、
+    下拉列表、消息框等）回退到系统浅色调色板时会黑字/刺眼，这里统一兜底。"""
+    from PySide6.QtGui import QPalette, QColor
+
+    def c(hexstr):
+        return QColor(hexstr)
+
+    pal = QPalette()
+    pal.setColor(QPalette.Window, c(BG_PANEL))
+    pal.setColor(QPalette.WindowText, c(TEXT))
+    pal.setColor(QPalette.Base, c("#0c1830"))
+    pal.setColor(QPalette.AlternateBase, c(BG_PANEL))
+    pal.setColor(QPalette.Text, c(TEXT))
+    pal.setColor(QPalette.Button, c(BG_CARD))
+    pal.setColor(QPalette.ButtonText, c(TEXT))
+    pal.setColor(QPalette.ToolTipBase, c(BG_PANEL))
+    pal.setColor(QPalette.ToolTipText, c(TEXT))
+    pal.setColor(QPalette.BrightText, c("#ffffff"))
+    pal.setColor(QPalette.Highlight, c("#10395c"))
+    pal.setColor(QPalette.HighlightedText, c(TEXT))
+    pal.setColor(QPalette.Link, c(ACCENT))
+    pal.setColor(QPalette.PlaceholderText, c(TEXT_DIM))
+    pal.setColor(QPalette.Disabled, QPalette.Text, c("#46566c"))
+    pal.setColor(QPalette.Disabled, QPalette.WindowText, c("#46566c"))
+    pal.setColor(QPalette.Disabled, QPalette.ButtonText, c("#46566c"))
+    app.setPalette(pal)
+
 QSS = f"""
 * {{
     font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
@@ -85,10 +114,10 @@ QComboBox QAbstractItemView {{
 
 /* ---- 表格 ---- */
 QTableWidget {{
-    background: {BG}; alternate-background-color: {BG_PANEL};
+    background: {BG}; color: {TEXT}; alternate-background-color: {BG_PANEL};
     border: 1px solid {BORDER}; gridline-color: {BORDER};
 }}
-QTableWidget::item {{ padding: 4px; }}
+QTableWidget::item {{ padding: 4px; color: {TEXT}; background: transparent; }}
 QTableWidget::item:selected {{ background: #10395c; color: {TEXT}; }}
 QHeaderView::section {{
     background: {BG_PANEL}; border: none; border-bottom: 1px solid {BORDER};
@@ -143,7 +172,40 @@ QToolTip {{
 }}
 QMessageBox {{ background: {BG_PANEL}; }}
 QMessageBox QLabel {{ color: {TEXT}; }}
-QCalendarWidget QWidget {{ alternate-background-color: #10203a; }}
-QMenu {{ background: {BG_PANEL}; border: 1px solid {BORDER}; }}
+QMenu {{ background: {BG_PANEL}; border: 1px solid {BORDER}; color: {TEXT}; }}
 QMenu::item:selected {{ background: #0b3a54; }}
+
+/* ---- 复选框（暗色主题下系统指示器看不清） ---- */
+QCheckBox {{ spacing: 7px; background: transparent; }}
+QCheckBox::indicator {{
+    width: 15px; height: 15px; border: 1px solid #2a4a74; border-radius: 3px;
+    background: #0c1830;
+}}
+QCheckBox::indicator:hover {{ border-color: {ACCENT}; }}
+QCheckBox::indicator:checked {{ background: #0b6a8f; border-color: {ACCENT}; }}
+QCheckBox::indicator:disabled {{ border-color: {BORDER}; background: {BG_PANEL}; }}
+
+/* ---- 日历弹窗（开始时间/Due Day 的日历选择） ---- */
+QCalendarWidget {{
+    background: {BG_PANEL}; color: {TEXT};
+}}
+QCalendarWidget QWidget {{ alternate-background-color: #10203a; color: {TEXT}; }}
+QCalendarWidget QToolButton {{
+    background: {BG_CARD}; color: {TEXT}; border: 1px solid {BORDER};
+    border-radius: 4px; padding: 4px 8px; font-weight: normal;
+}}
+QCalendarWidget QToolButton:hover {{ background: #0b3a54; border-color: {ACCENT}; }}
+QCalendarWidget QToolButton::menu-indicator {{ image: none; }}
+QCalendarWidget QWidget#qt_calendar_navigationbar {{ background: {BG_PANEL}; }}
+QCalendarWidget QSpinBox {{
+    background: #0c1830; color: {TEXT}; border: 1px solid {BORDER};
+    selection-background-color: #10395c;
+}}
+QCalendarWidget QAbstractItemView {{
+    background: #0c1830; color: {TEXT}; selection-background-color: #10395c;
+    selection-color: {TEXT}; outline: none;
+}}
+QCalendarWidget QAbstractItemView:enabled {{
+    font-size: 12px;
+}}
 """

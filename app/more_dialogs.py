@@ -11,7 +11,7 @@ from PySide6.QtWidgets import (
     QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel,
     QLineEdit, QListWidget, QListWidgetItem, QMessageBox, QPlainTextEdit,
     QPushButton, QTableWidget, QTabWidget, QTimeEdit, QVBoxLayout, QWidget,
-    QHeaderView, QCheckBox, QAbstractItemView,
+    QHeaderView, QCheckBox, QAbstractItemView, QTableWidgetItem,
 )
 
 from . import common
@@ -106,6 +106,7 @@ class AnomalyDialog(QDialog):
         w = QWidget()
         self.edTitle = QLineEdit()
         self.edTitle.setPlaceholderText("异常标题，例如：lot结批报错E102")
+        self.edTitle.setText(item.get("title", "") or "")
         form = QFormLayout()
         form.addRow("标题*", self.edTitle)
 
@@ -126,6 +127,7 @@ class AnomalyDialog(QDialog):
             ed = QPlainTextEdit()
             ed.setFixedHeight(50)
             ed.setPlaceholderText(hints[key])
+            ed.setPlainText(item.get(key, "") or "")  # 编辑时回填，避免保存清空
             self.edFields[key] = ed
             form.addRow(label, ed)
         v = QVBoxLayout(w)
@@ -223,10 +225,13 @@ class AnomalyDialog(QDialog):
         w = QWidget()
         v = QVBoxLayout(w)
         v.setContentsMargins(4, 8, 4, 4)
+        v.setSpacing(4)
         v.addWidget(QLabel("按时间顺序填：什么时间做了什么。预览/导出时会生成从左到右的时间线。"))
+        v.addWidget(QLabel("时间格式建议：10-08 08:15 或 2026-10-08 08:15"))
         self.tlTable = QTableWidget(0, 2)
-        self.tlTable.setHorizontalHeaderLabels(["时间（如 10-08 08:15）", "做了什么"])
+        self.tlTable.setHorizontalHeaderLabels(["时间", "做了什么"])
         self.tlTable.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.tlTable.setColumnWidth(0, 170)  # 容纳 2026-10-08 08:15 完整显示
         self.tlTable.verticalHeader().setVisible(False)
         h = QHBoxLayout()
         btnAdd = QPushButton("＋ 添加一行")

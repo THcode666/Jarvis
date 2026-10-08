@@ -28,6 +28,7 @@ def main():
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    theme.apply_dark_palette(app)  # 深色调色板兜底（先于QSS，覆盖原生部件）
     app.setStyleSheet(theme.QSS)
     window = MainWindow(DataStore(get_data_dir()))
     window.show()

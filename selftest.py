@@ -587,6 +587,20 @@ def test_gui(store, tmp, shots_dir):
     generate_ppt(an, [store.attachment_path(x["stored"]) for x in an["images"]], out_pptx)
     check("GUI生成PPT文件", os.path.exists(out_pptx) and os.path.getsize(out_pptx) > 10000)
 
+    # 解异编辑对话框加载带时间线/鱼骨的数据（回归：v1.3.0曾因缺导入崩溃）
+    from app.more_dialogs import AnomalyDialog
+    adlg = AnomalyDialog(store=store, item=an)
+    check("解异编辑加载时间线", adlg.tlTable.rowCount() == len(an.get("timeline", [])))
+    check("解异编辑加载鱼骨", adlg.fbEdits["人"].toPlainText() != "")
+    f = adlg.fields()
+    check("解异字段往返", f["title"] == an["title"]
+          and len(f["timeline"]) == len(an.get("timeline", [])))
+    adlg.close()
+
+    # 深色调色板兜底生效（表格项文字可读性）
+    pal_txt = win.palette().color(win.palette().ColorRole.Text).name()
+    check("全局深色调色板生效", pal_txt.lower() in ("#d7e3f4", "#d7e3f4 ".strip()))
+
     # 搜索跳转逻辑
     win.open_search_result("sops", sop["id"], False)
     check("搜索跳转到存知", win.stack.currentIndex() == 3)
