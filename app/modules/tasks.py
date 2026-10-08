@@ -21,22 +21,48 @@ from ..search import SearchRecord
 _PRIORITY_COLOR = {"高": "#ff6b6b", "中": "#ffb64d", "低": "#29c6ff", "弱": "#7d92ad"}
 
 
+def _due_dt(t):
+    """解析 due_day 为 datetime；兼容旧纯日期（视为当天）与新日期时间。返回 (dt, 带时分)。"""
+    v = (t.get("due_day") or "").strip()
+    if not v:
+        return None, False
+    for f in ("%Y-%m-%d %H:%M", "%Y-%m-%dT%H:%M"):
+        try:
+            return datetime.strptime(v[:16], f), True
+        except ValueError:
+            pass
+    try:
+        return datetime.strptime(v[:10], "%Y-%m-%d"), False
+    except ValueError:
+        return None, False
+
+
+def _is_due_overdue(t, today=None, now=None):
+    """纯日期按"当天结束前不算逾期"，带时分按精确时间比较。"""
+    dt, has_time = _due_dt(t)
+    if dt is None:
+        return False
+    if has_time:
+        return dt < (now or datetime.now())
+    return dt.date() < (today or datetime.today().date())
+
+
 def collect_due(tasks, today=None):
     """把未完成任务按 逾期 / 今日 / 三日内 分组（托盘提醒与角标共用）。"""
     today = today or datetime.today().date()
+    now = datetime.now()
     groups = {"逾期": [], "今日": [], "三日": []}
     for t in tasks:
-        if t.get("status") == STATUS_DONE or not t.get("due_day"):
+        if t.get("status") == STATUS_DONE:
             continue
-        try:
-            d = datetime.strptime(t["due_day"][:10], "%Y-%m-%d").date()
-        except ValueError:
+        dt, _ = _due_dt(t)
+        if dt is None:
             continue
-        if d < today:
+        if _is_due_overdue(t, today, now):
             groups["逾期"].append(t)
-        elif d == today:
+        elif dt.date() == today:
             groups["今日"].append(t)
-        elif d <= today + timedelta(days=3):
+        elif dt.date() <= today + timedelta(days=3):
             groups["三日"].append(t)
     return groups
 
@@ -128,12 +154,7 @@ class TaskModule(QWidget):
                 PRIORITY_ORDER.get(t.get("priority"), 9))
 
     def _is_overdue(self, t):
-        if not t.get("due_day"):
-            return False
-        try:
-            return datetime.strptime(t["due_day"][:10], "%Y-%m-%d").date() < datetime.today().date()
-        except ValueError:
-            return False
+        return _is_due_overdue(t)
 
     def _fill(self, table, tasks, done_tab):
         table.clearContents()
@@ -147,7 +168,9 @@ class TaskModule(QWidget):
             desc = QTableWidgetItem(t.get("desc", ""))
             diff = QTableWidgetItem(t.get("difficulty", ""))
             start = QTableWidgetItem(common.fmt_dt(t.get("start_time", "")))
-            due_text = common.fmt_d(t.get("due_day", ""))
+            _, has_time = _due_dt(t)
+            due_text = common.fmt_dt(t.get("due_day", "")) if has_time \
+                else common.fmt_d(t.get("due_day", ""))
             if overdue:
                 due_text += "  ⚠已逾期"
             due = QTableWidgetItem(due_text)
@@ -261,7 +284,8 @@ class TaskModule(QWidget):
                     "优先级": t.get("priority", ""),
                     "状态": t.get("status", ""),
                 },
-                time_text=f"{common.fmt_dt(t.get('start_time', ''))} → {common.fmt_d(t.get('due_day', ''))}",
+                time_text=f"{common.fmt_dt(t.get('start_time', ''))} → "
+                          f"{common.fmt_dt(t.get('due_day', '')) or common.fmt_d(t.get('due_day', ''))}",
             ))
         return records
 

@@ -18,6 +18,7 @@ import shutil
 import sys
 import tempfile
 import zipfile
+from datetime import datetime, timedelta
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
@@ -101,6 +102,38 @@ def test_data_layer(tmp):
     bdir = os.path.join(tmp, "data", "backups")
     check("启动自动备份JSON", os.path.isdir(bdir) and any(
         f.startswith("jarvis_data_") and f.endswith(".json") for f in os.listdir(bdir)))
+
+    # ---- 时间格式回归（v1.2.1）----
+    from app.modules.tasks import _is_due_overdue, collect_due
+    today = datetime.today().date()
+    check("旧纯日期今天不算逾期",
+          not _is_due_overdue({"status": "未完成", "due_day": today.strftime("%Y-%m-%d")}))
+    check("旧纯日期昨天算逾期",
+          _is_due_overdue({"status": "未完成",
+                           "due_day": (today - timedelta(days=1)).strftime("%Y-%m-%d")}))
+    past_hm = (datetime.now() - timedelta(hours=2)).strftime("%Y-%m-%d %H:%M")
+    check("带时分已过算逾期",
+          _is_due_overdue({"status": "未完成", "due_day": past_hm}))
+    g = collect_due([{"status": "未完成", "due_day": past_hm}])
+    check("今日但时分已过分入逾期", bool(g["逾期"]) and not g["今日"])
+    g2 = collect_due([{"status": "未完成",
+                       "due_day": (today + timedelta(days=3)).strftime("%Y-%m-%d 12:00")}])
+    check("三日内分组", bool(g2["三日"]) and not g2["逾期"] and not g2["今日"])
+
+    # 乱码时间自动修复（旧版bug产生的含%值 → 用创建时间修复）
+    store3 = DataStore(os.path.join(tmp, "data"))
+    store3.data["tasks"].append({
+        "id": "badfix1", "desc": "乱码样例", "difficulty": "",
+        "start_time": "%Y-%28-%8 %12:%1", "due_day": "2026-10-05",
+        "priority": "低", "status": "未完成",
+        "created_at": "2026-10-05 09:30", "completed_at": ""})
+    store3.save()
+    store4 = DataStore(os.path.join(tmp, "data"))
+    fixed = store4.find("tasks", "badfix1")
+    check("乱码时间自动修复",
+          fixed is not None and "%" not in fixed["start_time"]
+          and fixed["start_time"] == "2026-10-05 09:30")
+    store4.delete("tasks", "badfix1")
 
     # 删除（SOP附件随之删除）
     did = sop1["id"]
@@ -213,12 +246,18 @@ def test_export_import(store, tmp):
 
 def make_gui_store(tmp):
     """GUI测试专用：全新数据目录 + 完整示例数据（附件文件完好，可渲染缩略图）。"""
+    from datetime import datetime, timedelta
     from app.data_store import DataStore
 
     store = DataStore(os.path.join(tmp, "gui_data"))
-    store.add_task("换针卡（升级）", "卡点定位", "2026-10-01 08:00", "2026-10-05", "高")
-    store.add_task("校准prober", "温度补偿", "2026-10-01 10:00", "2026-09-28", "中")
-    store.add_task("写周报", "", "2026-10-02 09:00", "2026-10-03", "弱")
+    t0 = datetime.today()
+    today = t0.strftime("%Y-%m-%d")
+    d2 = (t0 + timedelta(days=2)).strftime("%Y-%m-%d")
+    store.add_task("换针卡（升级）", "卡点定位", "2026-10-01 08:00", "2026-10-05 18:00", "高")
+    store.add_task("校准prober", "温度补偿", "2026-10-01 10:00", "2026-09-28 12:00", "中")
+    store.add_task("写周报", "", "2026-10-02 09:00", "2026-10-03 17:30", "弱")
+    store.add_task("确认lot放行", "", f"{today} 08:00", f"{today} 17:00", "高")
+    store.add_task("盘点耗材", "", f"{today} 09:00", f"{d2} 12:00", "低")
     done = store.add_task("整理wafer盒", "", "2026-09-30 14:00", "2026-09-30", "低")
     store.set_task_status(done["id"], "已完成")
 
@@ -284,11 +323,35 @@ def test_gui(store, tmp, shots_dir):
     # 任务对话框
     from app.dialogs import TaskDialog, SopDialog
     dlg = TaskDialog(win, task=store.data["tasks"][0])
-    dlg.resize(460, 420)
+    dlg.resize(460, 460)
     dlg.show()
     app.processEvents()
     dlg.grab().save(os.path.join(shots_dir, "06_任务编辑对话框.png"))
+
+    # ---- 对话框时间回归（v1.2.1）----
+    f = dlg.fields()
+    ok = True
+    try:
+        datetime.strptime(f["start_time"], "%Y-%m-%d %H:%M")
+        datetime.strptime(f["due_day"], "%Y-%m-%d %H:%M")
+    except ValueError:
+        ok = False
+    check("对话框存出时间格式正确", ok and "%" not in f["start_time"] + f["due_day"])
+
+    from PySide6.QtCore import QDateTime, QDate
+    btns = {b.text(): b for b in dlg.findChildren(__import__("PySide6.QtWidgets",
+            fromlist=["QPushButton"]).QPushButton)}
+    btns["现在"].click()
+    check("开始时间[现在]按钮生效",
+          abs(QDateTime.currentDateTime().secsTo(dlg.edStart.dateTime())) <= 5)
+    btns["今天"].click()
+    check("DueDay[今天]按钮生效",
+          dlg.edDue.dateTime().date() == QDate.currentDate())
     dlg.close()
+
+    dlg2 = TaskDialog(win)  # 无参新建，验证默认值解析
+    check("旧纯日期due可编辑", dlg2.edDue.dateTime().isValid())
+    dlg2.close()
 
     sop = store.data["sops"][0]
     dlg2 = SopDialog(win, store=store, sop=sop)

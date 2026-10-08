@@ -9,10 +9,12 @@ import uuid
 from datetime import datetime
 
 APP_NAME = "贾维斯 Jarvis"
-APP_VERSION = "v1.2.0"
+APP_VERSION = "v1.2.1"
 
-DT_FORMAT = "%Y-%m-%d %H:%M"
+DT_FORMAT = "%Y-%m-%d %H:%M"        # Python strftime 语法（数据存储/strptime 用）
 D_FORMAT = "%Y-%m-%d"
+QT_DT_FORMAT = "yyyy-MM-dd HH:mm"   # Qt 语法（QDateTime toString/fromString 用）
+QT_D_FORMAT = "yyyy-MM-dd"
 
 
 def new_id() -> str:

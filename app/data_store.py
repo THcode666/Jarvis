@@ -60,12 +60,39 @@ class DataStore(QObject):
                     loaded = json.load(f)
                 for k in _DATA_KEYS:
                     self.data[k] = loaded.get(k, []) or []
+                if self._repair_garbage_times():
+                    self.save()  # 修复旧版时间格式bug产生的乱码，立即落盘
             except (json.JSONDecodeError, OSError):
                 # 数据文件损坏时不直接崩溃，把损坏文件改名保留现场
                 try:
                     shutil.copy(self.json_path, self.json_path + ".bad")
                 except OSError:
                     pass
+
+    def _repair_garbage_times(self) -> int:
+        """v1.2.0及之前对话框用错时间格式串，存出过含%的乱码值。
+
+        无法还原原始时间，但新建时这些字段默认值就是"当前时刻"，与
+        created_at 几乎相同，因此用 created_at 修复；正常数据不含%不会被动。
+        返回修复条数。
+        """
+        def bad(v):
+            return bool(v) and "%" in v
+
+        n = 0
+        for t in self.data["tasks"]:
+            if bad(t.get("start_time")):
+                t["start_time"] = common.fmt_dt(t.get("created_at")) or common.now_str()
+                n += 1
+        for m in self.data["memos"]:
+            if bad(m.get("time")):
+                m["time"] = common.fmt_dt(m.get("created_at")) or common.now_str()
+                n += 1
+        for q in self.data["questions"]:
+            if bad(q.get("time")):
+                q["time"] = common.fmt_dt(q.get("created_at")) or common.now_str()
+                n += 1
+        return n
 
     def save(self):
         tmp = self.json_path + ".tmp"

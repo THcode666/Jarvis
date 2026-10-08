@@ -4,11 +4,12 @@
 约定：dialog 返回 QDialog.Accepted 表示用户确认保存，字段从对话框属性读取。
 """
 import os
+from datetime import datetime
 
-from PySide6.QtCore import QDateTime, QDate, Qt, QSize
+from PySide6.QtCore import QDateTime, Qt, QSize
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
-    QComboBox, QDateEdit, QDateTimeEdit, QDialog, QFileDialog, QFormLayout,
+    QComboBox, QDateTimeEdit, QDialog, QFileDialog, QFormLayout,
     QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMessageBox,
     QPlainTextEdit, QPushButton, QVBoxLayout, QWidget, QDialogButtonBox,
     QAbstractItemView,
@@ -16,6 +17,37 @@ from PySide6.QtWidgets import (
 
 from . import common
 from .data_store import PRIORITIES
+
+
+def to_qdatetime(value: str):
+    """把存储的时间串解析成 QDateTime，兼容新旧各种格式；失败返回 None。"""
+    if not value:
+        return None
+    for f in (common.QT_DT_FORMAT, "yyyy-MM-dd HH:mm:ss", common.QT_D_FORMAT):
+        dt = QDateTime.fromString(value, f)
+        if dt.isValid():
+            return dt
+    for f in (common.DT_FORMAT, "%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M:%S"):
+        try:
+            d = datetime.strptime(value, f)
+            return QDateTime(d.year, d.month, d.day, d.hour, d.minute)
+        except ValueError:
+            continue
+    return None
+
+
+def _dt_row(editor: QDateTimeEdit, btn_text="现在"):
+    """时间编辑器 + 「现在」一键按钮（点击立即设为当前日期时间）。"""
+    bar = QWidget()
+    h = QHBoxLayout(bar)
+    h.setContentsMargins(0, 0, 0, 0)
+    h.setSpacing(6)
+    h.addWidget(editor, 1)
+    btn = QPushButton(btn_text)
+    btn.setToolTip("点击立即设为当前日期时间")
+    btn.clicked.connect(lambda: editor.setDateTime(QDateTime.currentDateTime()))
+    h.addWidget(btn)
+    return bar
 
 
 def _buttons(dlg, ok_text="保存"):
@@ -45,10 +77,10 @@ class TaskDialog(QDialog):
 
         self.edStart = QDateTimeEdit(QDateTime.currentDateTime())
         self.edStart.setCalendarPopup(True)
-        self.edStart.setDisplayFormat("yyyy-MM-dd HH:mm")
-        self.edDue = QDateEdit(QDate.currentDate().addDays(7))
+        self.edStart.setDisplayFormat(common.QT_DT_FORMAT)
+        self.edDue = QDateTimeEdit(QDateTime.currentDateTime().addDays(7))
         self.edDue.setCalendarPopup(True)
-        self.edDue.setDisplayFormat("yyyy-MM-dd")
+        self.edDue.setDisplayFormat(common.QT_DT_FORMAT)
         self.cbPri = QComboBox()
         self.cbPri.addItems(PRIORITIES)
         self.cbPri.setCurrentText("中")
@@ -56,8 +88,8 @@ class TaskDialog(QDialog):
         form = QFormLayout()
         form.addRow("事情描述*", self.edDesc)
         form.addRow("难点", self.edDiff)
-        form.addRow("开始时间", self.edStart)
-        form.addRow("Due Day", self.edDue)
+        form.addRow("开始时间", _dt_row(self.edStart))
+        form.addRow("Due Day", _dt_row(self.edDue, "今天"))
         form.addRow("优先级", self.cbPri)
 
         lay = QVBoxLayout(self)
@@ -67,26 +99,20 @@ class TaskDialog(QDialog):
         if task:
             self.edDesc.setPlainText(task.get("desc", ""))
             self.edDiff.setPlainText(task.get("difficulty", ""))
-            self._set_dt(self.edStart, task.get("start_time"))
-            self._set_d(self.edDue, task.get("due_day"))
+            dt = to_qdatetime(task.get("start_time", ""))
+            if dt is not None:
+                self.edStart.setDateTime(dt)
+            dt = to_qdatetime(task.get("due_day", ""))
+            if dt is not None:
+                self.edDue.setDateTime(dt)
             self.cbPri.setCurrentText(task.get("priority", "中"))
-
-    def _set_dt(self, editor, value):
-        dt = QDateTime.fromString(value, common.DT_FORMAT)
-        if value and dt.isValid():
-            editor.setDateTime(dt)
-
-    def _set_d(self, editor, value):
-        d = QDate.fromString((value or "")[:10], "yyyy-MM-dd")
-        if value and d.isValid():
-            editor.setDate(d)
 
     def fields(self):
         return {
             "desc": self.edDesc.toPlainText().strip(),
             "difficulty": self.edDiff.toPlainText().strip(),
-            "start_time": self.edStart.dateTime().toString(common.DT_FORMAT),
-            "due_day": self.edDue.date().toString("yyyy-MM-dd"),
+            "start_time": self.edStart.dateTime().toString(common.QT_DT_FORMAT),
+            "due_day": self.edDue.dateTime().toString(common.QT_DT_FORMAT),
             "priority": self.cbPri.currentText(),
         }
 
@@ -104,11 +130,11 @@ class MemoDialog(QDialog):
         self.edContent.setFixedHeight(110)
         self.edTime = QDateTimeEdit(QDateTime.currentDateTime())
         self.edTime.setCalendarPopup(True)
-        self.edTime.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.edTime.setDisplayFormat(common.QT_DT_FORMAT)
 
         form = QFormLayout()
         form.addRow("内容*", self.edContent)
-        form.addRow("时间", self.edTime)
+        form.addRow("时间", _dt_row(self.edTime))
 
         lay = QVBoxLayout(self)
         lay.addLayout(form)
@@ -116,14 +142,14 @@ class MemoDialog(QDialog):
 
         if memo:
             self.edContent.setPlainText(memo.get("content", ""))
-            dt = QDateTime.fromString(memo.get("time", ""), common.DT_FORMAT)
-            if memo.get("time") and dt.isValid():
+            dt = to_qdatetime(memo.get("time", ""))
+            if dt is not None:
                 self.edTime.setDateTime(dt)
 
     def fields(self):
         return {
             "content": self.edContent.toPlainText().strip(),
-            "time": self.edTime.dateTime().toString(common.DT_FORMAT),
+            "time": self.edTime.dateTime().toString(common.QT_DT_FORMAT),
         }
 
 
@@ -140,13 +166,13 @@ class QuestionDialog(QDialog):
         self.edQ.setFixedHeight(56)
         self.edTime = QDateTimeEdit(QDateTime.currentDateTime())
         self.edTime.setCalendarPopup(True)
-        self.edTime.setDisplayFormat("yyyy-MM-dd HH:mm")
+        self.edTime.setDisplayFormat(common.QT_DT_FORMAT)
         self.edSol = QPlainTextEdit()
         self.edSol.setPlaceholderText("解决方案（还没有可先留空，之后再补）")
 
         form = QFormLayout()
         form.addRow("问题*", self.edQ)
-        form.addRow("时间", self.edTime)
+        form.addRow("时间", _dt_row(self.edTime))
         form.addRow("解决方案", self.edSol)
 
         lay = QVBoxLayout(self)
@@ -156,14 +182,14 @@ class QuestionDialog(QDialog):
         if item:
             self.edQ.setPlainText(item.get("question", ""))
             self.edSol.setPlainText(item.get("solution", ""))
-            dt = QDateTime.fromString(item.get("time", ""), common.DT_FORMAT)
-            if item.get("time") and dt.isValid():
+            dt = to_qdatetime(item.get("time", ""))
+            if dt is not None:
                 self.edTime.setDateTime(dt)
 
     def fields(self):
         return {
             "question": self.edQ.toPlainText().strip(),
-            "time": self.edTime.dateTime().toString(common.DT_FORMAT),
+            "time": self.edTime.dateTime().toString(common.QT_DT_FORMAT),
             "solution": self.edSol.toPlainText().strip(),
         }
 
